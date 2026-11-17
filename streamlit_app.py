@@ -115,11 +115,12 @@ def procesar_datos_dia(res: CierreDia) -> dict:
     if bbva_total == 0 and res.total_tarjetas_cuaderno:
         bbva_total = float(res.total_tarjetas_cuaderno)
 
-    mp_neto = mp_total / 1.21
-    mp_iva = mp_total - mp_neto
+    # Discriminación exacta de IVA redondeada a 2 decimales para evitar decimales infinitos
+    mp_neto = round(mp_total / 1.21, 2)
+    mp_iva = round(mp_total - mp_neto, 2)
 
-    bbva_neto = bbva_total / 1.21
-    bbva_iva = bbva_total - bbva_neto
+    bbva_neto = round(bbva_total / 1.21, 2)
+    bbva_iva = round(bbva_total - bbva_neto, 2)
 
     gastos_total = 0.0
     celia_toti_total = 0.0
@@ -325,8 +326,8 @@ if menu_opcion == "Procesar Cierre Diario":
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Efectivo", f"${d['efectivo']:,.0f}")
-        c2.metric("Mercado Pago", f"${total_mp:,.0f}", f"IVA: ${d['mp_iva']:,.0f}")
-        c3.metric("Payway BBVA", f"${total_bbva:,.0f}", f"IVA: ${d['bbva_iva']:,.0f}")
+        c2.metric("Mercado Pago", f"${total_mp:,.2f}", f"IVA: ${d['mp_iva']:,.2f}")
+        c3.metric("Payway BBVA", f"${total_bbva:,.2f}", f"IVA: ${d['bbva_iva']:,.2f}")
         c4.metric("Provincia", f"${d['provincia']:,.0f}")
         c5.metric("Retiros (Celia/Toti)", f"${d['celia_toti']:,.0f}", f"Gastos: ${d['gastos']:,.0f}")
 
@@ -394,7 +395,7 @@ elif menu_opcion == "Tablero de Comando (Resumen)":
 
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Ventas Totales Mes", f"${total_general_ventas:,.0f}")
-                m2.metric("Total IVA Acumulado", f"${total_iva_mes:,.0f}")
+                m2.metric("Total IVA Acumulado", f"${total_iva_mes:,.2f}")
                 m3.metric("Tarjetas / QR Totales", f"${(t_mp_total + t_bbva_total + t_provincia):,.0f}")
                 m4.metric("Retiros (Celia/Toti)", f"${t_celia:,.0f}")
 
@@ -413,7 +414,7 @@ elif menu_opcion == "Tablero de Comando (Resumen)":
                     base_chart = alt.Chart(df_pie).mark_arc(innerRadius=50, outerRadius=120).encode(
                         theta=alt.Theta(field="Monto", type="quantitative"),
                         color=alt.Color(field="Medio de Pago", type="nominal", scale=alt.Scale(range=['#2ECC71', '#3498DB', '#9B59B6', '#E67E22'])),
-                        tooltip=["Medio de Pago", alt.Tooltip("Monto:Q", format="$,.0f")]
+                        tooltip=["Medio de Pago", alt.Tooltip("Monto:Q", format="$,.2f")]
                     ).properties(
                         height=400
                     )
