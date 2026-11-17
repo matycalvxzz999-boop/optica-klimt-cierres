@@ -6,6 +6,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from extractor import extraer_cierre_gemini, CierreDia
 import pandas as pd
+import altair as alt
 
 load_dotenv()
 APP_PASSWORD = os.getenv("APP_PASSWORD", "optica2026")
@@ -399,14 +400,26 @@ elif menu_opcion == "Tablero de Comando (Resumen)":
 
                 st.divider()
 
-                # GRÁFICO DE BARRAS NATIVO DE STREAMLIT (Cero errores de dependencias)
+                # GRÁFICO DE TORTA ("PIZZA") PROFESIONAL CON ALTAIR (Integrado nativamente)
                 st.subheader("📊 Distribución de Ingresos y Medios de Pago (Incluyendo IVA)")
                 
-                df_grafico = pd.DataFrame({
+                df_pie = pd.DataFrame({
                     "Medio de Pago": ["Efectivo", "Mercado Pago", "Payway BBVA", "Posnet Provincia"],
-                    "Monto Total ($)": [t_efectivo, t_mp_total, t_bbva_total, t_provincia]
+                    "Monto": [t_efectivo, t_mp_total, t_bbva_total, t_provincia]
                 })
-                st.bar_chart(df_grafico.set_index("Medio de Pago"))
+                df_pie = df_pie[df_pie["Monto"] > 0]
+
+                if not df_pie.empty:
+                    base_chart = alt.Chart(df_pie).mark_arc(innerRadius=50, outerRadius=120).encode(
+                        theta=alt.Theta(field="Monto", type="quantitative"),
+                        color=alt.Color(field="Medio de Pago", type="nominal", scale=alt.Scale(range=['#2ECC71', '#3498DB', '#9B59B6', '#E67E22'])),
+                        tooltip=["Medio de Pago", alt.Tooltip("Monto:Q", format="$,.0f")]
+                    ).properties(
+                        height=400
+                    )
+                    st.altair_chart(base_chart, use_container_width=True)
+                else:
+                    st.info("Aún no hay suficientes montos registrados para graficar la distribución.")
 
                 st.divider()
                 st.subheader("📋 Detalle Consolidado en Planilla")
