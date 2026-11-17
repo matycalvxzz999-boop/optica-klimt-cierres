@@ -6,14 +6,13 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from extractor import extraer_cierre_gemini, CierreDia
 import pandas as pd
-import matplotlib.pyplot as plt
 
 load_dotenv()
 APP_PASSWORD = os.getenv("APP_PASSWORD", "optica2026")
 ARCHIVO_MAESTRO = "cierre_mensual_optica.xlsx"
 
 st.set_page_config(
-    page_title="Optica Klimt - Tablero de Comando",
+    page_title="Optica Klimt - Cierres de Caja y Tablero",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -54,7 +53,6 @@ BORDE_TOTAL = Border(
     bottom=Side(style="double", color="1F4E78"),
 )
 
-# Columnas solicitadas incluyendo discriminación de IVA exigida por Martín
 COLUMNAS_EXCEL = [
     "Fecha",
     "Efectivo",
@@ -116,7 +114,7 @@ def procesar_datos_dia(res: CierreDia) -> dict:
     if bbva_total == 0 and res.total_tarjetas_cuaderno:
         bbva_total = float(res.total_tarjetas_cuaderno)
 
-    # Discriminación de IVA (21%) pedida por Martín para MP y BBVA
+    # Discriminación exacta exigida por Martín ($100 / 1,21 = Neto y IVA)
     mp_neto = mp_total / 1.21
     mp_iva = mp_total - mp_neto
 
@@ -132,7 +130,6 @@ def procesar_datos_dia(res: CierreDia) -> dict:
         concepto_lower = g.concepto.lower()
         tipo_lower = g.tipo.lower()
 
-        # Separar retiros de Celia / Toti
         if "cel" in concepto_lower or "toti" in concepto_lower or "celia" in concepto_lower or tipo_lower == "retiro":
             celia_toti_total += monto_g
             detalles_gastos.append(f"{g.concepto} (${monto_g:,.0f})")
@@ -207,7 +204,6 @@ def crear_libro_base(filas_datos: list) -> Workbook:
         ws.cell(row=fila_tot, column=1).fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
         ws.cell(row=fila_tot, column=1).border = BORDE_TOTAL
 
-        # Sumar todas las columnas numéricas abajo como pidió Martín
         letras = ["B", "C", "D", "E", "F", "G", "H", "I"]
         for idx, letra in enumerate(letras, start=2):
             c_tot = ws.cell(row=fila_tot, column=idx, value=f"=SUM({letra}{fila_inicio}:{letra}{fila_fin})")
@@ -218,6 +214,12 @@ def crear_libro_base(filas_datos: list) -> Workbook:
 
     ajustar_columnas(ws)
     return wb
+
+def generar_excel_solo_dia_bytes(res: CierreDia) -> bytes:
+    wb = crear_libro_base([construir_fila_dia(res)])
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
 
 def guardar_y_ordenar_en_mensual(res: CierreDia):
     nueva_fila = construir_fila_dia(res)
@@ -328,10 +330,13 @@ if menu_opcion == "Procesar Cierre Diario":
         c4.metric("Provincia", f"${d['provincia']:,.0f}")
         c5.metric("Retiros (Celia/Toti)", f"${d['celia_toti']:,.0f}", f"Gastos: ${d['gastos']:,.0f}")
 
+        if res.campos_dudosos:
+            st.warning(f"Revisar valores poco claros: {', '.join(res.campos_dudosos)}")
+
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("### Exportar Registros")
         
-        col_dl1, col_dl2 = st.columns(2)
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
         with col_dl1:
             if not st.session_state.get("guardado_maestro", False):
                 if st.button("Sumar al Excel Mensual", type="primary", use_container_width=True):
@@ -345,12 +350,21 @@ if menu_opcion == "Procesar Cierre Diario":
             if os.path.exists(ARCHIVO_MAESTRO):
                 with open(ARCHIVO_MAESTRO, "rb") as f:
                     st.download_button(
-                        label="Descargar Planilla Consolidada (.xlsx)",
+                        label="Descargar Planilla Consolidada",
                         data=f.read(),
                         file_name=ARCHIVO_MAESTRO,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
+
+        with col_dl3:
+            st.download_button(
+                label="Descargar Solo Este Día",
+                data=generar_excel_solo_dia_bytes(res),
+                file_name=f"Cierre_Optica_{res.fecha or 'dia'}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
 # --- VISTA 2: TABLERO DE COMANDO (RESUMEN Y GRÁFICOS) ---
 elif menu_opcion == "Tablero de Comando (Resumen)":
@@ -364,7 +378,6 @@ elif menu_opcion == "Tablero de Comando (Resumen)":
             df_master = df_master[~df_master["Fecha"].astype(str).str.contains("TOTAL|OPTICA", case=False)]
 
             if not df_master.empty:
-                # Totales acumulados
                 t_efectivo = df_master["Efectivo"].sum()
                 t_mp_neto = df_master["MP Neto"].sum()
                 t_mp_iva = df_master["MP IVA (21%)"].sum()
@@ -379,7 +392,6 @@ elif menu_opcion == "Tablero de Comando (Resumen)":
                 total_iva_mes = t_mp_iva + t_bbva_iva
                 total_general_ventas = t_efectivo + t_mp_total + t_bbva_total + t_provincia
 
-                # Métricas principales del Tablero
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Ventas Totales Mes", f"${total_general_ventas:,.0f}")
                 m2.metric("Total IVA Acumulado", f"${total_iva_mes:,.0f}")
@@ -388,22 +400,13 @@ elif menu_opcion == "Tablero de Comando (Resumen)":
 
                 st.divider()
 
-                # GRÁFICO DE TORTA (Distribución de ingresos incluyendo el IVA)
-                st.subheader("📊 Gráfico de Distribución de Ingresos (Incluyendo IVA)")
-                
-                fig, ax = plt.subplots(figsize=(8, 5))
-                labels = ['Efectivo', 'Mercado Pago (c/IVA)', 'Payway BBVA (c/IVA)', 'Posnet Provincia']
-                sizes = [t_efectivo, t_mp_total, t_bbva_total, t_provincia]
-                colors = ['#2ECC71', '#3498DB', '#9B59B6', '#E67E22']
-                
-                datos_filtrados = [(l, s, c) for l, s, c in zip(labels, sizes, colors) if s > 0]
-                if datos_filtrados:
-                    labs, vals, cols = zip(*datos_filtrados)
-                    ax.pie(vals, labels=labs, autopct='%1.1f%%', startangle=140, colors=cols, textprops={'fontsize': 10, 'weight': 'bold'})
-                    ax.axis('equal')
-                    st.pyplot(fig)
-                else:
-                    st.info("Aún no hay suficientes montos registrados para graficar.")
+                # Gráfico corporativo de distribución nativo
+                st.subheader("📊 Distribución de Ingresos y Medios de Pago (Incluyendo IVA)")
+                df_grafico = pd.DataFrame({
+                    "Medio de Pago": ["Efectivo", "Mercado Pago", "Payway BBVA", "Posnet Provincia"],
+                    "Monto Total ($)": [t_efectivo, t_mp_total, t_bbva_total, t_provincia]
+                })
+                st.bar_chart(df_grafico.set_index("Medio de Pago"))
 
                 st.divider()
                 st.subheader("📋 Detalle Consolidado en Planilla")
