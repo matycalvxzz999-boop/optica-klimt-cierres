@@ -6,7 +6,6 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from extractor import extraer_cierre_gemini, CierreDia
 import pandas as pd
-import plotly.express as px
 
 load_dotenv()
 APP_PASSWORD = os.getenv("APP_PASSWORD", "optica2026")
@@ -115,7 +114,6 @@ def procesar_datos_dia(res: CierreDia) -> dict:
     if bbva_total == 0 and res.total_tarjetas_cuaderno:
         bbva_total = float(res.total_tarjetas_cuaderno)
 
-    # Discriminación exacta de IVA (21%) pedida por Martín
     mp_neto = mp_total / 1.21
     mp_iva = mp_total - mp_neto
 
@@ -401,29 +399,14 @@ elif menu_opcion == "Tablero de Comando (Resumen)":
 
                 st.divider()
 
-                # GRÁFICO TIPO TORTA ("PIZZA") INTERACTIVO EN LA WEB
+                # GRÁFICO DE BARRAS NATIVO DE STREAMLIT (Cero errores de dependencias)
                 st.subheader("📊 Distribución de Ingresos y Medios de Pago (Incluyendo IVA)")
                 
-                df_pie = pd.DataFrame({
+                df_grafico = pd.DataFrame({
                     "Medio de Pago": ["Efectivo", "Mercado Pago", "Payway BBVA", "Posnet Provincia"],
-                    "Monto": [t_efectivo, t_mp_total, t_bbva_total, t_provincia]
+                    "Monto Total ($)": [t_efectivo, t_mp_total, t_bbva_total, t_provincia]
                 })
-                # Filtrar valores en 0 para que la torta quede limpia
-                df_pie = df_pie[df_pie["Monto"] > 0]
-
-                if not df_pie.empty:
-                    fig_pie = px.pie(
-                        df_pie, 
-                        names="Medio de Pago", 
-                        values="Monto", 
-                        hole=0.3, # Gráfico de dona moderno y elegante
-                        color_discrete_sequence=['#2ECC71', '#3498DB', '#9B59B6', '#E67E22']
-                    )
-                    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-                    fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=400)
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.info("Aún no hay montos suficientes para generar el gráfico de distribución.")
+                st.bar_chart(df_grafico.set_index("Medio de Pago"))
 
                 st.divider()
                 st.subheader("📋 Detalle Consolidado en Planilla")
