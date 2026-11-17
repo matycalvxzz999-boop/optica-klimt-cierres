@@ -229,6 +229,9 @@ def guardar_y_ordenar_en_mensual(res: CierreDia):
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
+# Leer contraseña institucional desde los Secrets de Streamlit con fallback a variable local
+app_password = st.secrets.get("APP_PASSWORD", APP_PASSWORD)
+
 if not st.session_state.autenticado:
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
@@ -242,7 +245,7 @@ if not st.session_state.autenticado:
         st.write("Ingrese la contraseña institucional para continuar.")
         pwd = st.text_input("Contraseña:", type="password")
         if st.button("Ingresar", type="primary", use_container_width=True):
-            if pwd == APP_PASSWORD:
+            if pwd == app_password:
                 st.session_state.autenticado = True
                 st.rerun()
             else:
@@ -282,7 +285,7 @@ if menu_opcion == "Procesar Cierre Diario":
     if uploaded_file is not None:
         col_img, col_act = st.columns([1, 1.5], gap="large")
         with col_img:
-            st.image(uploaded_file, caption="Planilla cargada", width="stretch")
+            st.image(uploaded_file, caption="Planilla cargada", use_column_width=True)
         with col_act:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Procesar Cierre con IA", type="primary", use_container_width=True):
