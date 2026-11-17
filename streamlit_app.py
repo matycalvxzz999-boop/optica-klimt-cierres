@@ -5,13 +5,14 @@ from dotenv import load_dotenv
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from extractor import extraer_cierre_gemini, CierreDia
+import pandas as pd
 
 load_dotenv()
 APP_PASSWORD = os.getenv("APP_PASSWORD", "optica2026")
 ARCHIVO_MAESTRO = "cierre_mensual_optica.xlsx"
 
 st.set_page_config(
-    page_title="Optica Klimt - Cierres de Caja",
+    page_title="Optica Klimt - Tablero de Comando",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -120,7 +121,8 @@ def procesar_datos_dia(res: CierreDia) -> dict:
         concepto_lower = g.concepto.lower()
         tipo_lower = g.tipo.lower()
 
-        if "celia" in concepto_lower or "toti" in concepto_lower or "retiro" in concepto_lower or tipo_lower == "retiro":
+        # REQUERIMIENTO: Separar retiros de Celia / Toti (ignorar como gasto común)
+        if "cel" in concepto_lower or "toti" in concepto_lower or "celia" in concepto_lower or tipo_lower == "retiro":
             celia_toti_total += monto_g
             detalles_gastos.append(f"{g.concepto} (${monto_g:,.0f})")
         else:
@@ -201,25 +203,22 @@ def crear_libro_base(filas_datos: list) -> Workbook:
     ajustar_columnas(ws)
     return wb
 
-def generar_excel_solo_dia_bytes(res: CierreDia) -> bytes:
-    wb = crear_libro_base([construir_fila_dia(res)])
-    output = io.BytesIO()
-    wb.save(output)
-    return output.getvalue()
-
 def guardar_y_ordenar_en_mensual(res: CierreDia):
     nueva_fila = construir_fila_dia(res)
     fecha_nueva = nueva_fila[0]
     filas_existentes = []
 
     if os.path.exists(ARCHIVO_MAESTRO):
-        wb_viejo = load_workbook(ARCHIVO_MAESTRO)
-        ws_viejo = wb_viejo.active
-        for row in ws_viejo.iter_rows(min_row=4, values_only=True):
-            if not row or not row[0] or str(row[0]).startswith("TOTAL"):
-                continue
-            if str(row[0]) != fecha_nueva:
-                filas_existentes.append(list(row[:len(COLUMNAS_EXCEL)]))
+        try:
+            wb_viejo = load_workbook(ARCHIVO_MAESTRO)
+            ws_viejo = wb_viejo.active
+            for row in ws_viejo.iter_rows(min_row=4, values_only=True):
+                if not row or not row[0] or str(row[0]).startswith("TOTAL") or str(row[0]).startswith("OPTICA"):
+                    continue
+                if str(row[0]) != fecha_nueva:
+                    filas_existentes.append(list(row[:len(COLUMNAS_EXCEL)]))
+        except Exception:
+            pass
 
     filas_existentes.append(nueva_fila)
     wb_nuevo = crear_libro_base(filas_existentes)
@@ -229,7 +228,6 @@ def guardar_y_ordenar_en_mensual(res: CierreDia):
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
-# Leer contraseña institucional desde los Secrets de Streamlit con fallback a variable local
 app_password = st.secrets.get("APP_PASSWORD", APP_PASSWORD)
 
 if not st.session_state.autenticado:
@@ -252,7 +250,7 @@ if not st.session_state.autenticado:
                 st.error("Contraseña incorrecta.")
     st.stop()
 
-# --- MENÚ LATERAL PROFESIONAL ---
+# --- MENÚ LATERAL ---
 with st.sidebar:
     if os.path.exists("logo.png"):
         st.image("logo.png", width=200)
@@ -261,12 +259,12 @@ with st.sidebar:
     else:
         st.markdown("### Optica Klimt")
     
-    st.write("Sistema de Gestión de Cierres")
+    st.write("Tablero de Comando Gerencial")
     st.divider()
     
     menu_opcion = st.radio(
         "Navegación",
-        ["Procesar Cierre Diario", "Resumen Mensual"],
+        ["Procesar Cierre Diario", "Tablero de Comando (Resumen)"],
         label_visibility="collapsed"
     )
     
@@ -310,21 +308,31 @@ if menu_opcion == "Procesar Cierre Diario":
         c2.metric("Mercado Pago", f"${d['mp_ventas']:,.0f}")
         c3.metric("Payway BBVA", f"${d['bbva_ventas']:,.0f}")
         c4.metric("Payway Provincia", f"${d['provincia_ventas']:,.0f}")
-        c5.metric("Gastos / Retiros", f"${d['gastos']:,.0f}", f"Celia/Toti: ${d['celia_toti']:,.0f}")
+        c5.metric("Retiros (Celia/Toti)", f"${d['celia_toti']:,.0f}", f"Gastos: ${d['gastos']:,.0f}")
 
-        if res.campos_dudosos:
-            st.warning(f"Revisar valores poco claros: {', '.join(res.campos_dudosos)}")
+        # REQUERIMIENTO: Discriminación de IVA (21%) para Mercado Pago y BBVA
+        st.markdown("### 📊 Discriminación Fiscal (IVA 21%)")
+        iva_mp_neto = d['mp_ventas'] / 1.21
+        iva_mp_val = d['mp_ventas'] - iva_mp_neto
+        iva_bbva_neto = d['bbva_ventas'] / 1.21
+        iva_bbva_val = d['bbva_ventas'] - iva_bbva_neto
+        total_iva_dia = iva_mp_val + iva_bbva_val
+
+        col_iva1, col_iva2, col_iva3 = st.columns(3)
+        col_iva1.metric("Neto Gravado (MP + BBVA)", f"${(iva_mp_neto + iva_bbva_neto):,.0f}")
+        col_iva2.metric("IVA Debito (21%)", f"${total_iva_dia:,.0f}")
+        col_iva3.metric("Efectivo / Provincia (Sin IVA)", f"${(d['efectivo_ventas'] + d['provincia_ventas']):,.0f}")
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("### Exportar Registros")
         
-        col_dl1, col_dl2, col_dl3 = st.columns(3)
+        col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
             if not st.session_state.get("guardado_maestro", False):
                 if st.button("Sumar al Excel Mensual", type="primary", use_container_width=True):
                     guardar_y_ordenar_en_mensual(res)
                     st.session_state.guardado_maestro = True
-                    st.success("Cierre agregado al acumulado mensual.")
+                    st.success("¡Cierre agregado y guardado en el maestro mensual!")
             else:
                 st.info("El cierre ya se encuentra registrado en el archivo mensual.")
 
@@ -332,36 +340,91 @@ if menu_opcion == "Procesar Cierre Diario":
             if os.path.exists(ARCHIVO_MAESTRO):
                 with open(ARCHIVO_MAESTRO, "rb") as f:
                     st.download_button(
-                        label="Descargar Excel Mensual",
+                        label="Descargar Planilla Consolidada (.xlsx)",
                         data=f.read(),
                         file_name=ARCHIVO_MAESTRO,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
 
-        with col_dl3:
-            st.download_button(
-                label="Descargar Solo Este Día",
-                data=generar_excel_solo_dia_bytes(res),
-                file_name=f"Cierre_Optica_{res.fecha or 'dia'}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-
-# --- VISTA 2: RESUMEN MENSUAL ---
-elif menu_opcion == "Resumen Mensual":
-    st.title("Optica Klimt - Planilla Mensual")
-    st.write("Acceso directo al archivo consolidado del mes en curso.")
+# --- VISTA 2: TABLERO DE COMANDO (RESUMEN MENSUAL Y GRÁFICOS) ---
+elif menu_opcion == "Tablero de Comando (Resumen)":
+    st.title("Optica Klimt - Tablero de Comando Gerencial")
+    st.write("Vista consolidada de resultados, evolución de ingresos y distribución fiscal.")
 
     if os.path.exists(ARCHIVO_MAESTRO):
-        st.success("Archivo maestro disponible para descarga.")
-        with open(ARCHIVO_MAESTRO, "rb") as f:
-            st.download_button(
-                label="Descargar Planilla Consolidada (.xlsx)",
-                data=f.read(),
-                file_name=ARCHIVO_MAESTRO,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
+        df_master = pd.read_excel(ARCHIVO_MAESTRO, sheet_name="Cierre Mensual", skiprows=2)
+        # Limpiar filas vacías o de totales
+        df_master = df_master.dropna(subset=["Fecha"])
+        df_master = df_master[~df_master["Fecha"].astype(str).str.contains("TOTAL|OPTICA", case=False)]
+
+        if not df_master.empty:
+            # Métricas principales
+            t_efectivo = df_master["Ventas en Efectivo"].sum()
+            t_mp = df_master["Ventas Mercado Pago"].sum()
+            t_bbva = df_master["Ventas Payway BBVA"].sum()
+            t_provincia = df_master["Ventas Payway Provincia"].sum()
+            t_gastos = df_master["Gastos"].sum()
+            t_celia = df_master["Celia o Toti"].sum()
+
+            total_general_ventas = t_efectivo + t_mp + t_bbva + t_provincia
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Ventas Totales Mes", f"${total_general_ventas:,.0f}")
+            m2.metric("Efectivo Acumulado", f"${t_efectivo:,.0f}")
+            m3.metric("Tarjetas / QR Totales", f"${(t_mp + t_bbva + t_provincia):,.0f}")
+            m4.metric("Retiros (Celia/Toti)", f"${t_celia:,.0f}")
+
+            st.divider()
+
+            # Discriminación de IVA acumulado del mes
+            st.subheader("💼 Discriminación Fiscal Mensual (IVA)")
+            iva_acum_mp = t_mp - (t_mp / 1.21)
+            iva_acum_bbva = t_bbva - (t_bbva / 1.21)
+            total_iva_mes = iva_acum_mp + iva_acum_bbva
+            neto_gravado_mes = (t_mp / 1.21) + (t_bbva / 1.21)
+
+            i1, i2, i3 = st.columns(3)
+            i1.metric("Total Neto Gravado", f"${neto_gravado_mes:,.0f}")
+            i2.metric("IVA Acumulado Total (21%)", f"${total_iva_mes:,.0f}")
+            i3.metric("Total No Gravado (Efectivo + Prov.)", f"${(t_efectivo + t_provincia):,.0f}")
+
+            st.divider()
+
+            # GRÁFICO DE TORTA (Distribución de ingresos por medio de pago + IVA)
+            st.subheader("📊 Distribución de Ingresos y Medios de Pago")
+            
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(8, 5))
+            
+            labels = ['Efectivo', 'Mercado Pago', 'Payway BBVA', 'Payway Provincia']
+            sizes = [t_efectivo, t_mp, t_bbva, t_provincia]
+            colors = ['#2ECC71', '#3498DB', '#9B59B6', '#E67E22']
+            
+            # Filtrar ceros para que el gráfico quede prolijo
+            datos_filtrados = [(l, s, c) for l, s, c in zip(labels, sizes, colors) if s > 0]
+            if datos_filtrados:
+                labs, vals, cols = zip(*datos_filtrados)
+                ax.pie(vals, labels=labs, autopct='%1.1f%%', startangle=140, colors=cols, textprops={'fontsize': 10, 'weight': 'bold'})
+                ax.axis('equal')
+                st.pyplot(fig)
+            else:
+                st.info("Aún no hay suficientes montos registrados para graficar.")
+
+            st.divider()
+            st.subheader("📋 Detalle de Cierres Registrados")
+            st.dataframe(df_master, use_container_width=True)
+
+            with open(ARCHIVO_MAESTRO, "rb") as f:
+                st.download_button(
+                    label="📥 Descargar Planilla Consolidada Completa (.xlsx)",
+                    data=f.read(),
+                    file_name=ARCHIVO_MAESTRO,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
+        else:
+            st.info("El archivo maestro está vacío. Cargá tu primer cierre desde la pestaña anterior.")
     else:
-        st.info("Aún no hay registros cargados en el archivo mensual.")
+        st.info("Aún no hay registros guardados. Procesá un cierre para iniciar el Tablero de Comando.")
