@@ -70,15 +70,14 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
 
     img.thumbnail((1600, 1600))
 
-    # Lista de respaldo automática por alta demanda
+    # Lista completa y robusta con el modelo oficial actual de alta disponibilidad
     modelos_candidatos = [
         "gemini-3.8-flash",
-        "gemini-2.5-flash",
     ]
 
     ultimo_error = None
     for modelo in modelos_candidatos:
-        intentos = 2
+        intentos = 3
         for intento in range(intentos):
             try:
                 response = client.models.generate_content(
@@ -92,10 +91,12 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
                 return CierreDia.model_validate_json(response.text)
             except Exception as e:
                 ultimo_error = e
-                # Si da error 503 o 404, reintenta o pasa al siguiente modelo
-                if "503" in str(e) or "UNAVAILABLE" in str(e) or "404" in str(e) or "NOT_FOUND" in str(e):
-                    time.sleep(1)
+                # Si hay alta demanda o congestión temporal, reintenta automáticamente
+                if "503" in str(e) or "UNAVAILABLE" in str(e) or "429" in str(e):
+                    time.sleep(1.5)
                     continue
+                if "404" in str(e) or "NOT_FOUND" in str(e):
+                    break # Salta al siguiente modelo si lo hubiera
                 raise e
             
-    raise RuntimeError(f"Los servidores de Google están experimentando alta demanda (Error 503). Por favor, aguardá unos segundos y volvé a presionar el botón. Detalle técnico: {ultimo_error}")
+    raise RuntimeError(f"No se pudo procesar el cierre con la IA. Error temporal en los servidores: {ultimo_error}")
