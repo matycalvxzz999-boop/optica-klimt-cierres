@@ -60,7 +60,7 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
     
     client = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=25000)
+        http_options=types.HttpOptions(timeout=30000)
     )
     
     if isinstance(img_path_or_bytes, bytes):
@@ -70,27 +70,32 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
 
     img.thumbnail((1600, 1600))
 
-    # Usamos exactamente el modelo requerido por la nueva SDK de Google
+    # Lista de respaldo automática por alta demanda
     modelos_candidatos = [
         "gemini-3.8-flash",
+        "gemini-2.5-flash",
     ]
 
     ultimo_error = None
     for modelo in modelos_candidatos:
-        try:
-            response = client.models.generate_content(
-                model=modelo,
-                contents=[img, SYSTEM_PROMPT + "\nDevolvé el resultado estrictamente en formato JSON esquema CierreDia."],
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": CierreDia,
-                },
-            )
-            return CierreDia.model_validate_json(response.text)
-        except Exception as e:
-            ultimo_error = e
-            if "404" in str(e) or "NOT_FOUND" in str(e):
-                continue
-            raise e
+        intentos = 2
+        for intento in range(intentos):
+            try:
+                response = client.models.generate_content(
+                    model=modelo,
+                    contents=[img, SYSTEM_PROMPT + "\nDevolvé el resultado estrictamente en formato JSON esquema CierreDia."],
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_schema": CierreDia,
+                    },
+                )
+                return CierreDia.model_validate_json(response.text)
+            except Exception as e:
+                ultimo_error = e
+                # Si da error 503 o 404, reintenta o pasa al siguiente modelo
+                if "503" in str(e) or "UNAVAILABLE" in str(e) or "404" in str(e) or "NOT_FOUND" in str(e):
+                    time.sleep(1)
+                    continue
+                raise e
             
-    raise RuntimeError(f"No se pudo procesar con el modelo de Gemini. Último error: {ultimo_error}")
+    raise RuntimeError(f"Los servidores de Google están experimentando alta demanda (Error 503). Por favor, aguardá unos segundos y volvé a presionar el botón. Detalle técnico: {ultimo_error}")
