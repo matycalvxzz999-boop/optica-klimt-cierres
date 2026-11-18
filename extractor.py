@@ -42,8 +42,8 @@ REGLAS ESTRICTAS:
 - Formato numérico argentino: punto para miles, coma para decimales. Devolvé los montos como números decimales puros (ej: 167000).
 - Fechas en formato ISO (AAAA-MM-DD). El encabezado lateral izquierdo suele tener el día y fecha (ej: "Lunes 16/11") y la caja inicial (ej: "CAJA $ 16.000"). Si falta el año, asumí 2026.
 - CLASIFICACIÓN DE MEDIO DE PAGO (MIRAR SIEMPRE LA COLUMNA "MODO"):
-  * Si el monto está en columna EFECTIVO -> "efectivo".
-  * Si el monto está en columna TARJETA, mirá qué dice al lado en columna MODO:
+  - Si el monto está en columna EFECTIVO -> "efectivo".
+  - Si el monto está en columna TARJETA, mirá qué dice al lado en columna MODO:
     - Si dice "QR MP", "QR" o "MP" -> "qr_mp".
     - Si dice "Payway" -> "payway_bbva".
     - Si dice "posnet B PCIA", "B PCIA", "PCIA" o "Provincia" -> "posnet_provincia".
@@ -70,12 +70,10 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
 
     img.thumbnail((1600, 1600))
 
-    # Prioridad directa a los modelos activos recomendados por Google
+    # Modelos actualizados y estables de la API de Google GenAI
     modelos_candidatos = [
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
         "gemini-2.5-flash",
+        "gemini-2.5-pro",
     ]
 
     ultimo_error = None
@@ -92,9 +90,8 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
             return CierreDia.model_validate_json(response.text)
         except Exception as e:
             ultimo_error = e
-            # Si el modelo no existe (404), salta inmediatamente al siguiente sin esperar
             if "404" in str(e) or "NOT_FOUND" in str(e):
                 continue
-            time.sleep(1)
-
-    raise RuntimeError(f"No se pudo procesar la imagen. Detalle: {ultimo_error}")
+            raise e
+            
+    raise RuntimeError(f"No se pudo procesar con ningún modelo de Gemini. Último error: {ultimo_error}")
