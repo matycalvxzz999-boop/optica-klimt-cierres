@@ -297,3 +297,177 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
         st.rerun()
+
+# --- VISTA 1: TABLERO DE COMANDO (RESUMEN Y GRÁFICOS) ---
+if menu_opcion == "Tablero de Comando (Resumen)":
+    st.title("Optica Klimt - Tablero de Comando Gerencial")
+    st.write("Vista ejecutiva de resultados, evolución de impuestos y distribución de ingresos.")
+
+    if os.path.exists(ARCHIVO_MAESTRO):
+        try:
+            df_master = pd.read_excel(ARCHIVO_MAESTRO, sheet_name="Cierre Mensual", skiprows=2)
+            df_master = df_master.dropna(subset=["Fecha"])
+            df_master = df_master[~df_master["Fecha"].astype(str).str.contains("TOTAL|OPTICA", case=False)]
+
+            if not df_master.empty:
+                t_efectivo = df_master["Efectivo"].sum()
+                t_mp_neto = df_master["MP Neto"].sum()
+                t_mp_iva = df_master["MP IVA (21%)"].sum()
+                t_bbva_neto = df_master["BBVA Neto"].sum()
+                t_bbva_iva = df_master["BBVA IVA (21%)"].sum()
+                t_provincia = df_master["Provincia"].sum()
+                t_gastos = df_master["Gastos"].sum()
+                t_celia = df_master["Celia / Toti"].sum()
+
+                t_mp_total = t_mp_neto + t_mp_iva
+                t_bbva_total = t_bbva_neto + t_bbva_iva
+                total_iva_mes = t_mp_iva + t_bbva_iva
+                total_general_ventas = t_efectivo + t_mp_total + t_bbva_total + t_provincia
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Ventas Totales Mes", f"${total_general_ventas:,.0f}")
+                m2.metric("Total IVA Acumulado", f"${total_iva_mes:,.2f}")
+                m3.metric("Tarjetas / QR Totales", f"${(t_mp_total + t_bbva_total + t_provincia):,.0f}")
+                m4.metric("Retiros (Celia/Toti)", f"${t_celia:,.0f}")
+
+                st.divider()
+
+                # GRÁFICO DE TORTA ("PIZZA") PROFESIONAL CON ALTAIR (Integrado nativamente)
+                st.subheader("📊 Distribución de Ingresos y Medios de Pago (Incluyendo IVA)")
+                
+                df_pie = pd.DataFrame({
+                    "Medio de Pago": ["Efectivo", "Mercado Pago", "Payway BBVA", "Posnet Provincia"],
+                    "Monto": [t_efectivo, t_mp_total, t_bbva_total, t_provincia]
+                })
+                df_pie = df_pie[df_pie["Monto"] > 0]
+
+                if not df_pie.empty:
+                    base_chart = alt.Chart(df_pie).mark_arc(innerRadius=50, outerRadius=120).encode(
+                        theta=alt.Theta(field="Monto", type="quantitative"),
+                        color=alt.Color(field="Medio de Pago", type="nominal", scale=alt.Scale(range=['#2ECC71', '#3498DB', '#9B59B6', '#E67E22'])),
+                        tooltip=["Medio de Pago", alt.Tooltip("Monto:Q", format="$,.2f")]
+                    ).properties(
+                        height=400
+                    )
+                    st.altair_chart(base_chart, use_container_width=True)
+                else:
+                    st.info("Aún no hay suficientes montos registrados para graficar la distribución.")
+
+                st.divider()
+                st.subheader("📋 Detalle Consolidado en Planilla")
+                st.dataframe(df_master, use_container_width=True)
+
+                with open(ARCHIVO_MAESTRO, "rb") as f:
+                    st.download_button(
+                        label="📥 Descargar Planilla Consolidada Completa (.xlsx)",
+                        data=f.read(),
+                        file_name=ARCHIVO_MAESTRO,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True
+                    )
+            else:
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Ventas Totales Mes", "$0")
+                m2.metric("Total IVA Acumulado", "$0.00")
+                m3.metric("Tarjetas / QR Totales", "$0")
+                m4.metric("Retiros (Celia/Toti)", "$0")
+                st.info("El archivo maestro está vacío pero listo. Podés descargar la planilla vacía o cargar tu primer cierre desde la pestaña 'Procesar Cierre Diario'.")
+                
+                st.divider()
+                st.subheader("📋 Detalle Consolidado en Planilla")
+                st.dataframe(df_master, use_container_width=True)
+
+                with open(ARCHIVO_MAESTRO, "rb") as f:
+                    st.download_button(
+                        label="📥 Descargar Planilla Consolidada Completa (.xlsx)",
+                        data=f.read(),
+                        file_name=ARCHIVO_MAESTRO,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True
+                    )
+        except Exception as e:
+            st.error(f"Error al leer el archivo maestro: {e}")
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Ventas Totales Mes", "$0")
+        m2.metric("Total IVA Acumulado", "$0.00")
+        m3.metric("Tarjetas / QR Totales", "$0")
+        m4.metric("Retiros (Celia/Toti)", "$0")
+        st.info("Aún no hay registros guardados. Procesá un cierre para iniciar el Tablero de Comando.")
+
+# --- VISTA 2: PROCESAR CIERRE ---
+elif menu_opcion == "Procesar Cierre Diario":
+    st.title("Optica Klimt - Cierres de Caja")
+    st.write("Suba la imagen del cuaderno de cierre diario para procesar los registros.")
+
+    uploaded_file = st.file_uploader("Seleccionar imagen de la planilla (JPG, PNG)", type=["jpg", "jpeg", "png"])
+
+    if uploaded_file is not None:
+        col_img, col_act = st.columns([1, 1.5], gap="large")
+        with col_img:
+            st.image(uploaded_file, caption="Planilla cargada", use_column_width=True)
+        with col_act:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Procesar Cierre con IA", type="primary", use_container_width=True):
+                try:
+                    with st.spinner("Procesando datos de la libreta..."):
+                        resultado = extraer_cierre_gemini(uploaded_file.getvalue())
+                        st.session_state.resultado = resultado
+                        st.session_state.guardado_maestro = False
+                        st.success("Datos procesados correctamente.")
+                except Exception as e:
+                    st.error(f"Error al procesar: {e}")
+
+    if "resultado" in st.session_state:
+        res: CierreDia = st.session_state.resultado
+        d = procesar_datos_dia(res)
+        total_mp = d["mp_neto"] + d["mp_iva"]
+        total_bbva = d["bbva_neto"] + d["bbva_iva"]
+
+        st.divider()
+        st.subheader(f"Resumen del Día — Fecha: {res.fecha or 'No detectada'}")
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Efectivo", f"${d['efectivo']:,.0f}")
+        c2.metric("Mercado Pago", f"${total_mp:,.2f}", f"IVA: ${d['mp_iva']:,.2f}")
+        c3.metric("Payway BBVA", f"${total_bbva:,.2f}", f"IVA: ${d['bbva_iva']:,.2f}")
+        c4.metric("Provincia", f"${d['provincia']:,.0f}")
+        c5.metric("Retiros (Celia/Toti)", f"${d['celia_toti']:,.0f}", f"Gastos: ${d['gastos']:,.0f}")
+
+        if res.campos_dudosos:
+            st.warning(f"Revisar valores poco claros: {', '.join(res.campos_dudosos)}")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("### Exportar Registros")
+        
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
+        with col_dl1:
+            if not st.session_state.get("guardado_maestro", False):
+                if st.button("Sumar al Excel Mensual", type="primary", use_container_width=True):
+                    guardar_y_ordenar_en_mensual(res)
+                    st.session_state.guardado_maestro = True
+                    st.success("¡Cierre agregado y guardado en el maestro mensual con IVA desglosado!")
+            else:
+                st.info("El cierre ya se encuentra registrado en el archivo mensual.")
+
+        with col_dl2:
+            if os.path.exists(ARCHIVO_MAESTRO):
+                with open(ARCHIVO_MAESTRO, "rb") as f:
+                    st.download_button(
+                        label="Descargar Planilla Consolidada",
+                        data=f.read(),
+                        file_name=ARCHIVO_MAESTRO,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+
+        with col_dl3:
+            st.download_button(
+                label="Descargar Solo Este Día",
+                data=generar_excel_solo_dia_bytes(res),
+                file_name=f"Cierre_Optica_{res.fecha or 'dia'}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
