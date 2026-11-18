@@ -70,10 +70,9 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
 
     img.thumbnail((1600, 1600))
 
-    # Modelos actualizados y estables de la API de Google GenAI
+    # Único modelo oficial y estable actual
     modelos_candidatos = [
         "gemini-2.5-flash",
-        "gemini-2.5-pro",
     ]
 
     ultimo_error = None
@@ -94,4 +93,4 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
                 continue
             raise e
             
-    raise RuntimeError(f"No se pudo procesar con ningún modelo de Gemini. Último error: {ultimo_error}")
+    raise RuntimeError(f"No se pudo procesar con el modelo de Gemini. Último error: {ultimo_error}")
