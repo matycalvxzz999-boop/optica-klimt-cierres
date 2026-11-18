@@ -70,9 +70,9 @@ def extraer_cierre_gemini(img_path_or_bytes) -> CierreDia:
 
     img.thumbnail((1600, 1600))
 
-    # Actualizamos al modelo estable actual de Google
+    # Usamos exactamente el modelo requerido por la nueva SDK de Google
     modelos_candidatos = [
-        "gemini-2.5-flash",
+        "gemini-3.8-flash",
     ]
 
     ultimo_error = None
