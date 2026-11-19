@@ -133,6 +133,20 @@ def _preparar_imagen(img_path_or_bytes: bytes | str) -> Image.Image:
     return img
 
 
+def _crear_config_generacion() -> "types.GenerateContentConfig":
+    """JSON estructurado con razonamiento bajo ('low': minimiza latencia; 'minimal' no lo acepta gemini-3.8-flash).
+    Si el SDK instalado es viejo y no soporta thinking_level, se usa la configuración sin esa opción."""
+    base = dict(response_mime_type="application/json", response_schema=CierreDia, temperature=0.0)
+    try:
+        return types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
+            **base,
+        )
+    except Exception as e:
+        logger.warning("SDK sin soporte de thinking_level (%s); se usa la configuración estándar.", e)
+        return types.GenerateContentConfig(**base)
+
+
 def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
     api_key = _obtener_api_key()
     if not api_key:
@@ -140,7 +154,7 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
 
     client = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=45000, api_version="v1beta"),
+        http_options=types.HttpOptions(timeout=90000, api_version="v1beta"),
     )
 
     img = _preparar_imagen(img_path_or_bytes)
@@ -154,9 +168,10 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
         "gemini-3.8-flash",
         "gemini-3.6-flash",
     ]
+    config_generacion = _crear_config_generacion()
     inicio_total = time.monotonic()
-    presupuesto_seg = 100  # tiempo máximo total antes de rendirse y mostrar el error
-    max_rondas = 3
+    presupuesto_seg = 200  # tiempo máximo total antes de rendirse y mostrar el error
+    max_rondas = 2
 
     ultimo_error: Optional[Exception] = None
     hubo_error_transitorio = False
@@ -177,11 +192,7 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
                         prompt
                         + "\nDevolvé el resultado estrictamente en formato JSON bajo el esquema CierreDia.",
                     ],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=CierreDia,
-                        temperature=0.0,
-                    ),
+                    config=config_generacion,
                 )
                 if not response.text:
                     raise ValueError(f"El modelo {modelo} devolvió una respuesta vacía.")
