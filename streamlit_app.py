@@ -1,10 +1,12 @@
 import contextlib
+import hmac
 import io
 import os
 import re
 import time
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import altair as alt
@@ -103,6 +105,9 @@ ETIQUETAS_MEDIO_PAGO = {
 }
 
 DENOMINACIONES_ARS = [20000, 10000, 2000, 1000, 500, 200, 100, 50, 20, 10]
+
+# Retiros de caja: palabra completa (evita falsos positivos como "Celeste" o "celular")
+RE_RETIRO = re.compile(r"\b(cel|celia|toti)\b", re.IGNORECASE)
 
 
 # --- UTILIDADES DE TIEMPO, SEGURIDAD Y ARCHIVOS ---
@@ -242,16 +247,24 @@ def procesar_datos_dia(res: CierreDia) -> dict:
         else:
             bbva_total += monto
 
-    # Respaldo si la planilla solo tenía subtotales escritos sin detalle línea a línea
+    # Respaldo si la planilla solo tenía subtotales escritos sin detalle línea a línea.
+    # Se registra cuánto vino de respaldo para que el Excel lo muestre como fila propia
+    # y sus fórmulas coincidan con lo que se ve en pantalla.
+    fallback_efectivo = Decimal("0.00")
+    fallback_tarjetas = Decimal("0.00")
+    fallback_gastos = Decimal("0.00")
     if efectivo_ventas == Decimal("0.00") and res.total_efectivo_cuaderno is not None:
-        efectivo_ventas = to_dec(res.total_efectivo_cuaderno)
+        fallback_efectivo = to_dec(res.total_efectivo_cuaderno)
+        efectivo_ventas = fallback_efectivo
     if (
         mp_total == Decimal("0.00")
         and bbva_total == Decimal("0.00")
         and provincia_ventas == Decimal("0.00")
+        and transf_ventas == Decimal("0.00")
         and res.total_tarjetas_cuaderno is not None
     ):
-        bbva_total = to_dec(res.total_tarjetas_cuaderno)
+        fallback_tarjetas = to_dec(res.total_tarjetas_cuaderno)
+        bbva_total = fallback_tarjetas
 
     mp_neto, mp_iva = desglosar_iva_21(mp_total)
     bbva_neto, bbva_iva = desglosar_iva_21(bbva_total + transf_ventas)
@@ -265,12 +278,7 @@ def procesar_datos_dia(res: CierreDia) -> dict:
         concepto_lower = (g.concepto or "").lower()
         tipo_lower = (g.tipo or "").lower()
 
-        if (
-            "cel" in concepto_lower
-            or "toti" in concepto_lower
-            or "celia" in concepto_lower
-            or tipo_lower == "retiro"
-        ):
+        if RE_RETIRO.search(concepto_lower) or tipo_lower == "retiro":
             celia_toti_total += monto_g
             detalles_gastos.append(f"[Retiro] {g.concepto} (${monto_g:,.2f})")
         else:
@@ -278,7 +286,8 @@ def procesar_datos_dia(res: CierreDia) -> dict:
             detalles_gastos.append(f"[Gasto] {g.concepto} (${monto_g:,.2f})")
 
     if gastos_total == Decimal("0.00") and celia_toti_total == Decimal("0.00") and res.total_gastos_cuaderno is not None:
-        gastos_total = to_dec(res.total_gastos_cuaderno)
+        fallback_gastos = to_dec(res.total_gastos_cuaderno)
+        gastos_total = fallback_gastos
 
     if res.observaciones:
         detalles_gastos.append(res.observaciones)
@@ -314,6 +323,9 @@ def procesar_datos_dia(res: CierreDia) -> dict:
         "caja_cuaderno": caja_cuaderno,
         "diferencia_cuaderno": diferencia_cuaderno,
         "detalle_obs": " | ".join(detalles_gastos),
+        "fallback_efectivo": fallback_efectivo,
+        "fallback_tarjetas": fallback_tarjetas,
+        "fallback_gastos": fallback_gastos,
     }
 
 
@@ -472,16 +484,22 @@ def generar_excel_completo_cierre_bytes(
     _estilizar_encabezado(ws_ing, 3, len(headers_ing))
     ws_ing.freeze_panes = "A4"
 
-    ops_a_volcar = (
-        res.operaciones
-        if res.operaciones
-        else [Operacion(detalle="Sin movimientos registrados", monto=Decimal("0.00"), medio_pago="efectivo", confianza="alta")]
-    )
+    ops_a_volcar = list(res.operaciones)
+    if d["fallback_efectivo"] > Decimal("0.00"):
+        ops_a_volcar.append(
+            Operacion(detalle="Subtotal efectivo según cuaderno (sin detalle)", monto=d["fallback_efectivo"], medio_pago="efectivo", confianza="media")
+        )
+    if d["fallback_tarjetas"] > Decimal("0.00"):
+        ops_a_volcar.append(
+            Operacion(detalle="Subtotal tarjetas según cuaderno (sin detalle)", monto=d["fallback_tarjetas"], medio_pago="payway_bbva", confianza="media")
+        )
+    if not ops_a_volcar:
+        ops_a_volcar = [Operacion(detalle="Sin movimientos registrados", monto=Decimal("0.00"), medio_pago="efectivo", confianza="alta")]
 
     for idx, op in enumerate(ops_a_volcar, start=1):
         r = 3 + idx
         medio_txt = ETIQUETAS_MEDIO_PAGO.get(op.medio_pago, op.medio_pago)
-        aplica_iva = op.medio_pago in ("qr_mp", "payway_bbva", "transferencia")
+        aplica_iva = op.medio_pago in ("qr_mp", "payway_bbva", "transferencia", "otro")
 
         ws_ing.cell(row=r, column=1, value=idx).alignment = Alignment(horizontal="center")
         ws_ing.cell(row=r, column=2, value=sanitizar_celda_excel(op.detalle))
@@ -529,11 +547,13 @@ def generar_excel_completo_cierre_bytes(
     _estilizar_encabezado(ws_egr, 3, len(headers_egr))
     ws_egr.freeze_panes = "A4"
 
-    egr_a_volcar = (
-        res.gastos_retiros
-        if res.gastos_retiros
-        else [GastoRetiro(tipo="gasto", concepto="Sin egresos ni retiros registrados", monto=Decimal("0.00"))]
-    )
+    egr_a_volcar = list(res.gastos_retiros)
+    if d["fallback_gastos"] > Decimal("0.00"):
+        egr_a_volcar.append(
+            GastoRetiro(tipo="gasto", concepto="Total gastos según cuaderno (sin detalle)", monto=d["fallback_gastos"])
+        )
+    if not egr_a_volcar:
+        egr_a_volcar = [GastoRetiro(tipo="gasto", concepto="Sin egresos ni retiros registrados", monto=Decimal("0.00"))]
 
     for idx, eg in enumerate(egr_a_volcar, start=1):
         r = 3 + idx
@@ -588,6 +608,7 @@ def generar_excel_completo_cierre_bytes(
         for c in range(1, 4):
             ws_arq.cell(row=r, column=c).border = BORDE_SUAVE
 
+    arqueo_cargado = total_contado_dec > Decimal("0.00")
     r_tot_arq = 4 + len(DENOMINACIONES_ARS)
     r_fin_arq = r_tot_arq - 1
     ws_arq.cell(row=r_tot_arq, column=1, value="TOTAL EFECTIVO CONTADO").font = Font(bold=True, color=COLOR_PRIMARIO)
@@ -692,12 +713,24 @@ def generar_excel_completo_cierre_bytes(
             f'=SUMIF(Ingresos!C4:C{r_fin_ing},"Posnet Provincia",Ingresos!E4:E{r_fin_ing})',
             "Posnet Banco Provincia",
         ),
-        ("iva_total", "3. Total IVA Discriminado (21% sobre MP y BBVA)", f"=Ingresos!G{r_tot_ing}", "IVA Crédito/Débito Fiscal"),
+        (
+            "ventas_transf",
+            "   - Ventas Transferencia Bancaria (Bruto)",
+            f'=SUMIF(Ingresos!C4:C{r_fin_ing},"Transferencia Bancaria",Ingresos!E4:E{r_fin_ing})',
+            "Incluye IVA 21%",
+        ),
+        (
+            "ventas_otro",
+            "   - Ventas Otro Medio (Bruto)",
+            f'=SUMIF(Ingresos!C4:C{r_fin_ing},"Otro Medio",Ingresos!E4:E{r_fin_ing})',
+            "Incluye IVA 21%",
+        ),
+        ("iva_total", "3. Total IVA Discriminado (21%)", f"=Ingresos!G{r_tot_ing}", "IVA Crédito/Débito Fiscal"),
         ("egresos_total", "4. Total Egresos (Gastos y Retiros)", f"=Egresos!D{r_tot_egr}", "Suma hoja Egresos"),
         ("efectivo_esperado", "5. Total Esperado en Efectivo (Caja Física)", None, "Fondo Inicial + Efectivo - Egresos"),
-        ("efectivo_contado", "6. Total Contado en Arqueo de Billetes", f"=Arqueo_Denominaciones!C{r_tot_arq}", "Suma hoja Arqueo"),
+        ("efectivo_contado", "6. Total Contado en Arqueo de Billetes", (f"=Arqueo_Denominaciones!C{r_tot_arq}" if arqueo_cargado else "Sin arqueo cargado"), "Suma hoja Arqueo"),
         ("dif_arqueo", "7. Diferencia de Arqueo (Contado - Esperado)", None, "Positivo = Sobrante | Negativo = Faltante"),
-        ("caja_cuaderno", "8. Total Declarado en Cuaderno (Cierre Celia)", float(d["caja_cuaderno"]), "Valor total anotado en cuaderno"),
+        ("caja_cuaderno", "8. Total Declarado en Cuaderno (Cierre Celia)", (float(d["caja_cuaderno"]) if d["tiene_caja_cuaderno"] else "No declarado"), "Valor total anotado en cuaderno"),
         ("general_esperado", "9. Total General Esperado (Efectivo + Tarjetas/QR)", None, "Fondo Inicial + Ingresos Totales - Egresos"),
         ("dif_cuaderno", "10. Diferencia vs. Cuaderno", None, "Comparación cuaderno vs sistema"),
     ]
@@ -709,11 +742,13 @@ def generar_excel_completo_cierre_bytes(
         if clave == "efectivo_esperado":
             formula_final = f"=B{fila_por_clave['fondo_inicial']}+B{fila_por_clave['ventas_efectivo']}-B{fila_por_clave['egresos_total']}"
         elif clave == "dif_arqueo":
-            formula_final = f"=B{fila_por_clave['efectivo_contado']}-B{fila_por_clave['efectivo_esperado']}"
+            _c, _e = fila_por_clave['efectivo_contado'], fila_por_clave['efectivo_esperado']
+            formula_final = f'=IF(ISNUMBER(B{_c}),B{_c}-B{_e},"Sin dato")'
         elif clave == "general_esperado":
             formula_final = f"=B{fila_por_clave['fondo_inicial']}+B{fila_por_clave['ingresos_brutos']}-B{fila_por_clave['egresos_total']}"
         elif clave == "dif_cuaderno":
-            formula_final = f"=B{fila_por_clave['caja_cuaderno']}-B{fila_por_clave['general_esperado']}"
+            _c, _g = fila_por_clave['caja_cuaderno'], fila_por_clave['general_esperado']
+            formula_final = f'=IF(ISNUMBER(B{_c}),B{_c}-B{_g},"Sin dato")'
         else:
             formula_final = valor_o_formula
 
@@ -737,8 +772,14 @@ def generar_excel_completo_cierre_bytes(
                 if clave == "dif_arqueo"
                 else d["diferencia_cuaderno"]
             )
-            bg = COLOR_ROJO_BG if dif_ref < Decimal("0.00") else COLOR_VERDE_BG
-            fg = COLOR_ROJO_TXT if dif_ref < Decimal("0.00") else COLOR_VERDE_TXT
+            sin_dato = (clave == "dif_arqueo" and not arqueo_cargado) or (
+                clave == "dif_cuaderno" and not d["tiene_caja_cuaderno"]
+            )
+            if sin_dato:
+                bg, fg = "EDEDED", "595959"
+            else:
+                bg = COLOR_ROJO_BG if dif_ref < Decimal("0.00") else COLOR_VERDE_BG
+                fg = COLOR_ROJO_TXT if dif_ref < Decimal("0.00") else COLOR_VERDE_TXT
             fill_dif = PatternFill(start_color=bg, end_color=bg, fill_type="solid")
             for col_i in (1, 2, 3):
                 cell_d = ws_res.cell(row=r, column=col_i)
@@ -764,6 +805,18 @@ def asegurar_archivo_maestro():
                 buf = io.BytesIO()
                 wb.save(buf)
                 guardar_bytes_atomico(ARCHIVO_MAESTRO, buf.getvalue())
+
+
+def existe_fecha_en_mensual(fecha_str: str) -> bool:
+    """True si el consolidado ya tiene una fila para esa fecha (AAAA-MM-DD)."""
+    if not os.path.exists(ARCHIVO_MAESTRO):
+        return False
+    try:
+        wb = load_workbook(ARCHIVO_MAESTRO, read_only=True, data_only=True)
+        ws = wb.active
+        return any(str(row[0]) == fecha_str for row in ws.iter_rows(min_row=4, max_col=1, values_only=True) if row and row[0])
+    except Exception:
+        return False
 
 
 def guardar_y_ordenar_en_mensual(res: CierreDia):
@@ -817,7 +870,7 @@ if not st.session_state.autenticado:
         st.write("Ingrese la contraseña institucional para continuar.")
         pwd = st.text_input("Contraseña:", type="password")
         if st.button("Ingresar", type="primary", use_container_width=True):
-            if pwd == app_password:
+            if hmac.compare_digest(pwd.encode("utf-8"), app_password.encode("utf-8")):
                 st.session_state.autenticado = True
                 st.rerun()
             else:
@@ -849,6 +902,8 @@ with st.sidebar:
 if menu_opcion == "Tablero de Comando (Resumen)":
     st.title("Óptica Klimt — Tablero de Comando Gerencial")
     st.write("Vista ejecutiva del consolidado mensual, discriminación de IVA (21%) y distribución por medio de pago.")
+    if st.session_state.pop("msg_restaurado", False):
+        st.success("Planilla consolidada restaurada correctamente.")
 
     try:
         df_master = pd.read_excel(ARCHIVO_MAESTRO, skiprows=2)
@@ -948,18 +1003,34 @@ if menu_opcion == "Tablero de Comando (Resumen)":
                 "Confirmo que deseo reemplazar el consolidado mensual actual por este archivo",
                 key="confirmar_restauracion",
             )
-            if excel_subido is not None and confirmar_restauracion:
+            id_subido = (excel_subido.name, excel_subido.size) if excel_subido is not None else None
+            restaurado_ok = False
+            if (
+                excel_subido is not None
+                and confirmar_restauracion
+                and id_subido != st.session_state.get("restaurado_id")
+            ):
                 try:
                     wb_test = load_workbook(io.BytesIO(excel_subido.getvalue()))
-                    if "Cierre Mensual" not in wb_test.sheetnames and "Historico_Mensual" not in wb_test.sheetnames:
-                        st.error("El archivo subido no corresponde al formato oficial de Óptica Klimt.")
+                    ws_test = wb_test.active
+                    encabezado = [str(c.value).strip() if c.value is not None else "" for c in ws_test[3]][
+                        : len(COLUMNAS_HISTORICO)
+                    ]
+                    if encabezado != COLUMNAS_HISTORICO:
+                        st.error(
+                            "El archivo no tiene las columnas oficiales del consolidado en la fila 3 "
+                            f"({', '.join(COLUMNAS_HISTORICO)}). No se reemplazó nada."
+                        )
                     else:
                         with bloqueo_archivo():
                             guardar_bytes_atomico(ARCHIVO_MAESTRO, excel_subido.getvalue())
-                        st.success("Planilla consolidada restaurada correctamente.")
-                        st.rerun()
+                        st.session_state["restaurado_id"] = id_subido
+                        st.session_state["msg_restaurado"] = True
+                        restaurado_ok = True
                 except Exception as err:
                     st.error(f"Archivo inválido o corrupto: {err}")
+            if restaurado_ok:
+                st.rerun()
 
 # --- VISTA 2: PROCESAR CIERRE DIARIO ---
 elif menu_opcion == "Procesar Cierre Diario":
@@ -980,6 +1051,8 @@ elif menu_opcion == "Procesar Cierre Diario":
                         resultado = extraer_cierre_gemini(uploaded_file.getvalue())
                         st.session_state.resultado = resultado
                         st.session_state.guardado_maestro = False
+                        for _den in DENOMINACIONES_ARS:
+                            st.session_state.pop(f"bill_{_den}", None)
                         st.success("Planilla procesada y auditada correctamente.")
                 except Exception as e:
                     st.error(f"Error al procesar: {e}")
@@ -1035,7 +1108,10 @@ elif menu_opcion == "Procesar Cierre Diario":
             a1, a2, a3 = st.columns(3)
             a1.metric("Efectivo Esperado en Caja", f"$ {d['efectivo_esperado_caja']:,.2f}")
             a2.metric("Total Billetes Contados", f"$ {total_billetes_ui:,.2f}")
-            a3.metric("Diferencia Arqueo", f"$ {dif_billetes_ui:,.2f}")
+            a3.metric(
+                "Diferencia Arqueo",
+                f"$ {dif_billetes_ui:,.2f}" if total_billetes_ui > Decimal("0.00") else "Cargá el conteo",
+            )
 
         st.divider()
         st.subheader("Exportación y Confirmación")
@@ -1049,7 +1125,20 @@ elif menu_opcion == "Procesar Cierre Diario":
         col_dl1, col_dl2, col_dl3 = st.columns(3)
         with col_dl1:
             if not st.session_state.get("guardado_maestro", False):
-                if st.button("Confirmar y Sumar al Consolidado Mensual", type="primary", use_container_width=True):
+                fecha_ya_existe = existe_fecha_en_mensual(fecha_slug)
+                reemplazo_ok = True
+                if fecha_ya_existe:
+                    st.warning(
+                        f"Ya hay un cierre del {fecha_slug} en el consolidado. Si confirmás, "
+                        "se REEMPLAZA (si era otro turno del mismo día, ese turno se pierde)."
+                    )
+                    reemplazo_ok = st.checkbox("Entiendo y quiero reemplazarlo", key="confirmar_reemplazo_fecha")
+                if st.button(
+                    "Confirmar y Sumar al Consolidado Mensual",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not reemplazo_ok,
+                ):
                     try:
                         guardar_y_ordenar_en_mensual(res)
                         st.session_state.guardado_maestro = True
