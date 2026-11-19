@@ -3,9 +3,10 @@ import logging
 import os
 import random
 import time
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal, Optional
+from zoneinfo import ZoneInfo
 
 from google import genai
 from google.genai import types
@@ -82,7 +83,7 @@ Columnas habituales: [Productos / Boleta | EFECTIVO | TARJETA | MODO | ENTRADA |
 REGLAS ESTRICTAS DE EXTRACCIÓN:
 1. Transcribí ÚNICAMENTE los valores visibles en la imagen. Si un número está tachado, borroneado o es ilegible, devolvé null y describí la fila en "campos_dudosos". JAMÁS inventes ni estimes cifras.
 2. Formato numérico argentino: en la libreta el punto separa miles (ej: $37.000 = 37000, $165.000 = 165000). Devolvé números decimales puros sin puntos de miles ni signo $.
-3. Fecha contable en formato ISO (AAAA-MM-DD). Revisá el margen izquierdo vertical (ej: "17-11-26" -> "2026-11-17"). Si falta el año, asumí 2026.
+3. Fecha contable en formato ISO (AAAA-MM-DD). Revisá el margen izquierdo vertical (ej: "17-11-26" -> "2026-11-17"). Si falta el año, asumí {ANIO_ACTUAL}.
 4. Saldo inicial ("CAJA $13.000" en el margen izquierdo): cargalo en "saldo_inicial".
 5. CLASIFICACIÓN OBLIGATORIA DE MEDIO DE PAGO (mirar columna TARJETA y columna MODO):
   - Si el monto está en la columna EFECTIVO -> medio_pago = "efectivo".
@@ -143,6 +144,8 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
     )
 
     img = _preparar_imagen(img_path_or_bytes)
+    anio_actual = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).year
+    prompt = SYSTEM_PROMPT.replace("{ANIO_ACTUAL}", str(anio_actual))
 
     modelos_candidatos = [
         "gemini-3.8-flash",
@@ -150,6 +153,7 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
     ]
 
     ultimo_error: Optional[Exception] = None
+    hubo_error_transitorio = False
 
     for modelo in modelos_candidatos:
         max_reintentos = 3
@@ -159,7 +163,7 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
                     model=modelo,
                     contents=[
                         img,
-                        SYSTEM_PROMPT
+                        prompt
                         + "\nDevolvé el resultado estrictamente en formato JSON bajo el esquema CierreDia.",
                     ],
                     config=types.GenerateContentConfig(
@@ -179,6 +183,7 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
                     code in err_str
                     for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "504", "DEADLINE")
                 ):
+                    hubo_error_transitorio = True
                     jitter = random.uniform(0.1, 0.7)
                     espera = (2.0 * (intento + 1)) + jitter
                     logger.warning("Reintento %s/%s para modelo %s tras error transitorio: %s", intento + 1, max_reintentos, modelo, err_str)
@@ -189,7 +194,12 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
                     break
                 raise RuntimeError(f"Error al interpretar la planilla con {modelo}: {err_str}") from e
 
+    if hubo_error_transitorio:
+        raise RuntimeError(
+            f"Los servidores de IA están experimentando alta demanda temporal (503). "
+            f"Aguardá 15 segundos y volvé a presionar 'Procesar Cierre con IA'. Detalle: {ultimo_error}"
+        )
     raise RuntimeError(
-        f"Los servidores de IA están experimentando alta demanda temporal (503). "
-        f"Aguardá 15 segundos y volvé a presionar 'Procesar Cierre con IA'. Detalle: {ultimo_error}"
+        f"Ningún modelo respondió ({', '.join(modelos_candidatos)}). Verificá GEMINI_API_KEY, "
+        f"sus permisos y los nombres de modelo. Detalle: {ultimo_error}"
     )
