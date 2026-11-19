@@ -147,23 +147,27 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
     anio_actual = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).year
     prompt = SYSTEM_PROMPT.replace("{ANIO_ACTUAL}", str(anio_actual))
 
-    # Modelos rápidos primero. (gemini-3.1-pro-preview se sacó: es lento y daba 404.)
+    # Modelos vigentes para cuentas nuevas (ver ai.google.dev/gemini-api/docs/deprecations).
+    # - gemini-2.5-*: Google los limitó a quienes ya los usaban (da 404 en cuentas nuevas).
+    # - gemini-3.7-flash se omite a propósito: Google lo redirige a gemini-3.8-flash.
     modelos_candidatos = [
         "gemini-3.8-flash",
-        "gemini-2.5-flash",
+        "gemini-3.6-flash",
     ]
     inicio_total = time.monotonic()
     presupuesto_seg = 100  # tiempo máximo total antes de rendirse y mostrar el error
+    max_rondas = 3
 
     ultimo_error: Optional[Exception] = None
     hubo_error_transitorio = False
     errores_por_modelo: dict[str, str] = {}
+    modelos_no_disponibles: set[str] = set()
 
-    for modelo in modelos_candidatos:
-        max_reintentos = 2
-        for intento in range(max_reintentos):
+    for ronda in range(max_rondas):
+        for modelo in modelos_candidatos:
+            if modelo in modelos_no_disponibles:
+                continue
             if time.monotonic() - inicio_total > presupuesto_seg:
-                errores_por_modelo.setdefault(modelo, "Omitido: se agotó el tiempo máximo de espera")
                 break
             try:
                 response = client.models.generate_content(
@@ -185,28 +189,35 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
 
             except Exception as e:
                 ultimo_error = e
-                errores_por_modelo[modelo] = str(e)[:250]
                 err_str = str(e)
+                errores_por_modelo[modelo] = err_str[:250]
                 if any(
                     code in err_str
                     for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "504", "DEADLINE")
                 ):
+                    # Modelo saturado: no se espera ni se repite, se pasa al siguiente modelo de inmediato.
                     hubo_error_transitorio = True
-                    jitter = random.uniform(0.1, 0.7)
-                    espera = (2.0 * (intento + 1)) + jitter
-                    logger.warning("Reintento %s/%s para modelo %s tras error transitorio: %s", intento + 1, max_reintentos, modelo, err_str)
-                    time.sleep(espera)
+                    logger.warning("Modelo %s saturado o lento (ronda %s): %s", modelo, ronda + 1, err_str[:200])
                     continue
                 if "404" in err_str or "NOT_FOUND" in err_str:
-                    logger.warning("Modelo %s no disponible (404), pasando al siguiente candidato.", modelo)
-                    break
+                    modelos_no_disponibles.add(modelo)
+                    logger.warning("Modelo %s no disponible (404), se descarta.", modelo)
+                    continue
                 raise RuntimeError(f"Error al interpretar la planilla con {modelo}: {err_str}") from e
+
+        # Fin de ronda: ¿tiene sentido volver a intentar?
+        if all(m in modelos_no_disponibles for m in modelos_candidatos):
+            break
+        if time.monotonic() - inicio_total > presupuesto_seg:
+            break
+        if ronda < max_rondas - 1:
+            time.sleep(5 * (ronda + 1) + random.uniform(0.1, 0.7))
 
     detalle_modelos = " || ".join(f"{m}: {err}" for m, err in errores_por_modelo.items())
     if hubo_error_transitorio:
         raise RuntimeError(
-            f"Los servidores de IA están experimentando alta demanda temporal (503). "
-            f"Aguardá 15 segundos y volvé a presionar 'Procesar Cierre con IA'. Detalle por modelo: {detalle_modelos}"
+            "Los servidores de Gemini están saturados en este momento (error de Google, no de tu planilla). "
+            f"Esperá un minuto y volvé a presionar 'Procesar Cierre con IA'. Detalle por modelo: {detalle_modelos}"
         )
     raise RuntimeError(
         f"Ningún modelo respondió ({', '.join(modelos_candidatos)}). Verificá GEMINI_API_KEY, "
