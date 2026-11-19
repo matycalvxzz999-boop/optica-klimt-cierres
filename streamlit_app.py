@@ -1,8 +1,11 @@
+import contextlib
 import io
 import os
 import re
+import time
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
 
 import altair as alt
 import pandas as pd
@@ -16,8 +19,10 @@ from extractor import CierreDia, GastoRetiro, Operacion, extraer_cierre_gemini
 
 load_dotenv()
 
-APP_PASSWORD = os.getenv("APP_PASSWORD", "optica2026")
+ZONA_ARG = ZoneInfo("America/Argentina/Buenos_Aires")
 ARCHIVO_MAESTRO = "cierre_mensual_optica.xlsx"
+ARCHIVO_LOCK = f"{ARCHIVO_MAESTRO}.lock"
+LOGO_CANDIDATOS = ("logo.png", "logo.jpg")
 
 st.set_page_config(
     page_title="Óptica Klimt - Tablero de Comando Gerencial",
@@ -100,17 +105,97 @@ ETIQUETAS_MEDIO_PAGO = {
 DENOMINACIONES_ARS = [20000, 10000, 2000, 1000, 500, 200, 100, 50, 20, 10]
 
 
+# --- UTILIDADES DE TIEMPO, SEGURIDAD Y ARCHIVOS ---
+def ahora_arg() -> datetime:
+    return datetime.now(ZONA_ARG)
+
+
+def obtener_password_configurada() -> Optional[str]:
+    try:
+        secret_pwd = st.secrets.get("APP_PASSWORD")
+        if secret_pwd:
+            return str(secret_pwd)
+    except Exception:
+        pass
+    env_pwd = os.getenv("APP_PASSWORD")
+    if env_pwd:
+        return str(env_pwd)
+    return None
+
+
+def mostrar_logo(width: int = 180):
+    for ruta in LOGO_CANDIDATOS:
+        if os.path.exists(ruta):
+            st.image(ruta, width=width)
+            return True
+    return False
+
+
+def sanitizar_nombre_archivo(texto: str) -> str:
+    limpio = re.sub(r"[^A-Za-z0-9_-]", "_", (texto or "").strip())
+    return re.sub(r"_+", "_", limpio).strip("_") or "SinDato"
+
+
+def sanitizar_celda_excel(valor) -> str:
+    """Previene inyección de fórmulas en celdas de texto de Excel."""
+    texto = "" if valor is None else str(valor)
+    if texto.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + texto
+    return texto
+
+
+@contextlib.contextmanager
+def bloqueo_archivo(lock_path: str = ARCHIVO_LOCK, timeout_seg: float = 10.0):
+    """Bloqueo cooperativo simple para evitar condiciones de carrera al guardar el Excel."""
+    inicio = time.monotonic()
+    fd = None
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode("utf-8"))
+            break
+        except FileExistsError:
+            # Limpia locks huérfanos muy antiguos (> 60s)
+            with contextlib.suppress(OSError):
+                if time.time() - os.path.getmtime(lock_path) > 60:
+                    os.remove(lock_path)
+                    continue
+            if time.monotonic() - inicio >= timeout_seg:
+                raise TimeoutError("El archivo consolidado está siendo actualizado por otra operación. Reintentá.")
+            time.sleep(0.15)
+    try:
+        yield
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        with contextlib.suppress(OSError):
+            os.remove(lock_path)
+
+
+def guardar_bytes_atomico(ruta_destino: str, contenido_bytes: bytes):
+    tmp_path = f"{ruta_destino}.tmp.{os.getpid()}"
+    with open(tmp_path, "wb") as f_out:
+        f_out.write(contenido_bytes)
+        f_out.flush()
+        os.fsync(f_out.fileno())
+    os.replace(tmp_path, ruta_destino)
+
+
 # --- UTILIDADES FINANCIERAS EXACTAS (DECIMAL) ---
 def to_dec(val: Decimal | float | int | str | None) -> Decimal:
     if val is None or val == "":
         return Decimal("0.00")
     if isinstance(val, Decimal):
+        if val.is_nan() or val.is_infinite():
+            return Decimal("0.00")
         return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     try:
         if isinstance(val, float) and pd.isna(val):
             return Decimal("0.00")
-        return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    except Exception:
+        limpio = str(val).replace("$", "").strip()
+        return Decimal(limpio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
         return Decimal("0.00")
 
 
@@ -124,9 +209,14 @@ def desglosar_iva_21(bruto: Decimal) -> tuple[Decimal, Decimal]:
     return neto, iva
 
 
-def sanitizar_nombre_archivo(texto: str) -> str:
-    limpio = re.sub(r"[^A-Za-z0-9_-]", "_", texto.strip())
-    return re.sub(r"_+", "_", limpio).strip("_") or "SinDato"
+def sumar_serie_decimal(df: pd.DataFrame, columna: str) -> Decimal:
+    """Suma una columna numérica de DataFrame usando Decimal para evitar arrastre de floats."""
+    if columna not in df.columns or df.empty:
+        return Decimal("0.00")
+    total = Decimal("0.00")
+    for raw_val in df[columna].tolist():
+        total += to_dec(raw_val)
+    return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 # --- CÁLCULOS DE CIERRE ---
@@ -153,13 +243,13 @@ def procesar_datos_dia(res: CierreDia) -> dict:
             bbva_total += monto
 
     # Respaldo si la planilla solo tenía subtotales escritos sin detalle línea a línea
-    if efectivo_ventas == Decimal("0.00") and res.total_efectivo_cuaderno:
+    if efectivo_ventas == Decimal("0.00") and res.total_efectivo_cuaderno is not None:
         efectivo_ventas = to_dec(res.total_efectivo_cuaderno)
     if (
         mp_total == Decimal("0.00")
         and bbva_total == Decimal("0.00")
         and provincia_ventas == Decimal("0.00")
-        and res.total_tarjetas_cuaderno
+        and res.total_tarjetas_cuaderno is not None
     ):
         bbva_total = to_dec(res.total_tarjetas_cuaderno)
 
@@ -172,8 +262,8 @@ def procesar_datos_dia(res: CierreDia) -> dict:
 
     for g in res.gastos_retiros:
         monto_g = to_dec(g.monto)
-        concepto_lower = g.concepto.lower()
-        tipo_lower = g.tipo.lower()
+        concepto_lower = (g.concepto or "").lower()
+        tipo_lower = (g.tipo or "").lower()
 
         if (
             "cel" in concepto_lower
@@ -187,7 +277,7 @@ def procesar_datos_dia(res: CierreDia) -> dict:
             gastos_total += monto_g
             detalles_gastos.append(f"[Gasto] {g.concepto} (${monto_g:,.2f})")
 
-    if gastos_total == Decimal("0.00") and celia_toti_total == Decimal("0.00") and res.total_gastos_cuaderno:
+    if gastos_total == Decimal("0.00") and celia_toti_total == Decimal("0.00") and res.total_gastos_cuaderno is not None:
         gastos_total = to_dec(res.total_gastos_cuaderno)
 
     if res.observaciones:
@@ -197,16 +287,12 @@ def procesar_datos_dia(res: CierreDia) -> dict:
     total_ingresos_brutos = efectivo_ventas + mp_total + bbva_total + transf_ventas + provincia_ventas
     total_egresos = gastos_total + celia_toti_total
 
-    # Efectivo físico esperado en caja = Saldo inicial + Ventas efectivo - Gastos - Retiros
     efectivo_esperado_caja = saldo_inicial + efectivo_ventas - total_egresos
-    # Total general esperado (incluyendo saldos electrónicos + efectivo en caja)
     total_general_esperado = saldo_inicial + total_ingresos_brutos - total_egresos
 
-    # Si Celia anotó "CAJA TOTAL" en el cuaderno, se compara contra el total general esperado; si no, contra efectivo esperado
+    tiene_caja_cuaderno = res.caja_total_cuaderno is not None
     caja_cuaderno = to_dec(res.caja_total_cuaderno)
-    diferencia_cuaderno = (
-        caja_cuaderno - total_general_esperado if res.caja_total_cuaderno is not None else Decimal("0.00")
-    )
+    diferencia_cuaderno = (caja_cuaderno - total_general_esperado) if tiene_caja_cuaderno else Decimal("0.00")
 
     return {
         "saldo_inicial": saldo_inicial,
@@ -224,6 +310,7 @@ def procesar_datos_dia(res: CierreDia) -> dict:
         "total_ingresos_brutos": total_ingresos_brutos,
         "efectivo_esperado_caja": efectivo_esperado_caja,
         "total_general_esperado": total_general_esperado,
+        "tiene_caja_cuaderno": tiene_caja_cuaderno,
         "caja_cuaderno": caja_cuaderno,
         "diferencia_cuaderno": diferencia_cuaderno,
         "detalle_obs": " | ".join(detalles_gastos),
@@ -231,7 +318,7 @@ def procesar_datos_dia(res: CierreDia) -> dict:
 
 
 def construir_fila_historico(res: CierreDia) -> list:
-    fecha_str = res.fecha.strftime("%Y-%m-%d") if res.fecha else datetime.now().strftime("%Y-%m-%d")
+    fecha_str = res.fecha.strftime("%Y-%m-%d") if res.fecha else ahora_arg().strftime("%Y-%m-%d")
     d = procesar_datos_dia(res)
     return [
         fecha_str,
@@ -244,7 +331,7 @@ def construir_fila_historico(res: CierreDia) -> list:
         float(d["gastos"]),
         float(d["celia_toti"]),
         float(d["diferencia_cuaderno"]),
-        d["detalle_obs"],
+        sanitizar_celda_excel(d["detalle_obs"]),
     ]
 
 
@@ -258,7 +345,7 @@ def _configurar_impresion(ws, landscape: bool = True):
     ws.oddHeader.center.text = "ÓPTICA KLIMT - AUDITORÍA DE CIERRE DE CAJA"
     ws.oddHeader.center.size = 10
     ws.oddHeader.center.font = "Calibri,Bold"
-    ws.oddFooter.left.text = f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    ws.oddFooter.left.text = f"Generado: {ahora_arg().strftime('%d/%m/%Y %H:%M')}"
     ws.oddFooter.right.text = "Página &P de &N"
 
 
@@ -303,7 +390,11 @@ def _construir_hoja_historico(ws, filas_datos: list):
     filas_ordenadas = sorted(filas_datos, key=lambda x: str(x[0]))
 
     for idx_f, fila in enumerate(filas_ordenadas):
-        ws.append(fila)
+        fila_segura = list(fila[: len(COLUMNAS_HISTORICO)])
+        while len(fila_segura) < len(COLUMNAS_HISTORICO):
+            fila_segura.append(0.0)
+        fila_segura[-1] = sanitizar_celda_excel(fila_segura[-1])
+        ws.append(fila_segura)
         r = ws.max_row
         fill_zebra = PatternFill(start_color=COLOR_ZEBRA, end_color=COLOR_ZEBRA, fill_type="solid")
         for col in range(1, len(COLUMNAS_HISTORICO) + 1):
@@ -359,105 +450,20 @@ def generar_excel_completo_cierre_bytes(
     """
     wb = Workbook()
     d = procesar_datos_dia(res)
-    fecha_display = res.fecha.strftime("%d/%m/%Y") if res.fecha else datetime.now().strftime("%d/%m/%Y")
+    ahora = ahora_arg()
+    fecha_display = res.fecha.strftime("%d/%m/%Y") if res.fecha else ahora.strftime("%d/%m/%Y")
     turno_display = res.turno or "Único"
     cajero_display = res.cajero or "Celia"
 
-    # ---------------------------------------------------------
-    # HOJA 1: RESUMEN EJECUTIVO (Con fórmulas vinculadas a hojas 2, 3 y 4)
-    # ---------------------------------------------------------
+    # Primero construimos las hojas detalle para conocer con exactitud las filas de totales
     ws_res = wb.active
     ws_res.title = "Resumen"
-    ws_res["A1"] = "ÓPTICA KLIMT — ACTA DE CIERRE DE CAJA DIARIO"
-    ws_res["A1"].font = Font(bold=True, size=15, color=COLOR_PRIMARIO)
-    ws_res.row_dimensions[1].height = 28
-
-    meta = [
-        ("Fecha Contable:", fecha_display, "Cajero / Responsable:", cajero_display),
-        ("Turno:", turno_display, "Supervisor:", supervisor),
-        ("Fecha Generación:", datetime.now().strftime("%d/%m/%Y %H:%M"), "Estado:", "CONFIRMADO / AUDITADO"),
-    ]
-    for idx, (k1, v1, k2, v2) in enumerate(meta, start=3):
-        ws_res.cell(row=idx, column=1, value=k1).font = Font(bold=True, color=COLOR_PRIMARIO)
-        ws_res.cell(row=idx, column=2, value=v1)
-        ws_res.cell(row=idx, column=3, value=k2).font = Font(bold=True, color=COLOR_PRIMARIO)
-        ws_res.cell(row=idx, column=4, value=v2)
-        for c in range(1, 5):
-            ws_res.cell(row=idx, column=c).border = BORDE_SUAVE
-            ws_res.cell(row=idx, column=c).fill = PatternFill(
-                start_color=COLOR_ZEBRA, end_color=COLOR_ZEBRA, fill_type="solid"
-            )
-
-    ws_res.cell(row=7, column=1, value="CONCEPTO CONTABLE").font = Font(bold=True, color="FFFFFF")
-    ws_res.cell(row=7, column=2, value="IMPORTE (ARS)").font = Font(bold=True, color="FFFFFF")
-    ws_res.cell(row=7, column=3, value="ORIGEN / FÓRMULA AUDITORÍA").font = Font(bold=True, color="FFFFFF")
-    _estilizar_encabezado(ws_res, 7, 3)
-    ws_res.freeze_panes = "A8"
-
-    # Filas dinámicas conectadas a Ingresos, Egresos y Arqueo
-    num_ops = max(len(res.operaciones), 1)
-    fila_tot_ingresos = 4 + num_ops
-    num_egr = max(len(res.gastos_retiros), 1)
-    fila_tot_egresos = 4 + num_egr
-    fila_tot_arqueo = 4 + len(DENOMINACIONES_ARS)
-
-    filas_resumen = [
-        ("1. Fondo Inicial de Caja", float(d["saldo_inicial"]), "Saldo inicial declarado en libreta"),
-        ("2. Total Ingresos Brutos (Todos los medios)", f"=Ingresos!E{fila_tot_ingresos}", "Suma hoja Ingresos"),
-        ("   - Ventas en Efectivo", f"=SUMIF(Ingresos!C4:C{fila_tot_ingresos-1},\"Efectivo\",Ingresos!E4:E{fila_tot_ingresos-1})", "Subtotal Efectivo"),
-        ("   - Ventas Mercado Pago (Bruto)", f"=SUMIF(Ingresos!C4:C{fila_tot_ingresos-1},\"Mercado Pago*\",Ingresos!E4:E{fila_tot_ingresos-1})", "Incluye IVA 21%"),
-        ("   - Ventas Payway BBVA (Bruto)", f"=SUMIF(Ingresos!C4:C{fila_tot_ingresos-1},\"Payway BBVA\",Ingresos!E4:E{fila_tot_ingresos-1})", "Incluye IVA 21%"),
-        ("   - Ventas Posnet Provincia", f"=SUMIF(Ingresos!C4:C{fila_tot_ingresos-1},\"Posnet Provincia\",Ingresos!E4:E{fila_tot_ingresos-1})", "Posnet Banco Provincia"),
-        ("3. Total IVA Discriminado (21% sobre MP y BBVA)", f"=Ingresos!G{fila_tot_ingresos}", "IVA Crédito/Débito Fiscal"),
-        ("4. Total Egresos (Gastos y Retiros)", f"=Egresos!D{fila_tot_egresos}", "Suma hoja Egresos"),
-        ("5. Total Esperado en Efectivo (Caja Física)", "=B8+B10-B15", "Fondo Inicial + Efectivo - Egresos"),
-        ("6. Total Contado en Arqueo de Billetes", f"=Arqueo_Denominaciones!C{fila_tot_arqueo}", "Suma hoja Arqueo"),
-        ("7. Diferencia de Arqueo (Contado - Esperado)", "=B17-B16", "Positivo = Sobrante | Negativo = Faltante"),
-        ("8. Total Declarado en Cuaderno (Cierre Celia)", float(d["caja_cuaderno"]), "Valor total anotado en cuaderno"),
-        ("9. Total General Esperado (Efectivo + Tarjetas/QR)", "=B8+B9-B15", "Fondo Inicial + Ingresos Totales - Egresos"),
-        ("10. Diferencia vs. Cuaderno", "=B19-B20", "Comparación cuaderno vs sistema"),
-    ]
-
-    for offset, (concepto, formula_o_val, nota) in enumerate(filas_resumen):
-        r = 8 + offset
-        c1 = ws_res.cell(row=r, column=1, value=concepto)
-        c2 = ws_res.cell(row=r, column=2, value=formula_o_val)
-        c3 = ws_res.cell(row=r, column=3, value=nota)
-
-        c1.border = BORDE_SUAVE
-        c2.border = BORDE_SUAVE
-        c3.border = BORDE_SUAVE
-        c2.number_format = FORMATO_MONEDA_ARS
-        c3.font = Font(italic=True, color="595959", size=10)
-
-        if concepto.startswith(("1.", "2.", "4.", "5.", "6.", "8.", "9.")):
-            c1.font = Font(bold=True)
-            c2.font = Font(bold=True)
-
-        # Destacado visual de diferencias (filas 18 y 21)
-        if concepto.startswith(("7.", "10.")):
-            dif_ref = (
-                (to_dec(sum(k * v for k, v in (arqueo_conteo or {}).items())) - d["efectivo_esperado_caja"])
-                if concepto.startswith("7.")
-                else d["diferencia_cuaderno"]
-            )
-            bg = COLOR_ROJO_BG if dif_ref < Decimal("0.00") else COLOR_VERDE_BG
-            fg = COLOR_ROJO_TXT if dif_ref < Decimal("0.00") else COLOR_VERDE_TXT
-            fill_dif = PatternFill(start_color=bg, end_color=bg, fill_type="solid")
-            for col_i in (1, 2, 3):
-                cell_d = ws_res.cell(row=r, column=col_i)
-                cell_d.fill = fill_dif
-                cell_d.font = Font(bold=True, color=fg, size=11)
-                cell_d.border = BORDE_TOTAL
-
-    _ajustar_columnas(ws_res, min_width=18, max_width=52)
-    _configurar_impresion(ws_res, landscape=False)
 
     # ---------------------------------------------------------
     # HOJA 2: INGRESOS (Con fórmulas de Neto e IVA 21%)
     # ---------------------------------------------------------
     ws_ing = wb.create_sheet(title="Ingresos")
-    ws_ing["A1"] = f"DETALLE DE INGRESOS — FECHA: {fecha_display} — TURNO: {turno_display}"
+    ws_ing["A1"] = sanitizar_celda_excel(f"DETALLE DE INGRESOS — FECHA: {fecha_display} — TURNO: {turno_display}")
     ws_ing["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
 
     headers_ing = ["#", "Detalle / Producto", "Medio de Pago", "Confianza IA", "Importe Bruto", "Neto Gravado", "IVA (21%)"]
@@ -466,9 +472,11 @@ def generar_excel_completo_cierre_bytes(
     _estilizar_encabezado(ws_ing, 3, len(headers_ing))
     ws_ing.freeze_panes = "A4"
 
-    ops_a_volcar = res.operaciones if res.operaciones else [
-        Operacion(detalle="Sin movimientos registrados", monto=Decimal("0.00"), medio_pago="efectivo", confianza="alta")
-    ]
+    ops_a_volcar = (
+        res.operaciones
+        if res.operaciones
+        else [Operacion(detalle="Sin movimientos registrados", monto=Decimal("0.00"), medio_pago="efectivo", confianza="alta")]
+    )
 
     for idx, op in enumerate(ops_a_volcar, start=1):
         r = 3 + idx
@@ -476,8 +484,8 @@ def generar_excel_completo_cierre_bytes(
         aplica_iva = op.medio_pago in ("qr_mp", "payway_bbva", "transferencia")
 
         ws_ing.cell(row=r, column=1, value=idx).alignment = Alignment(horizontal="center")
-        ws_ing.cell(row=r, column=2, value=op.detalle)
-        ws_ing.cell(row=r, column=3, value=medio_txt)
+        ws_ing.cell(row=r, column=2, value=sanitizar_celda_excel(op.detalle))
+        ws_ing.cell(row=r, column=3, value=sanitizar_celda_excel(medio_txt))
         ws_ing.cell(row=r, column=4, value=op.confianza.upper()).alignment = Alignment(horizontal="center")
         ws_ing.cell(row=r, column=5, value=float(to_dec(op.monto))).number_format = FORMATO_MONEDA_ARS
 
@@ -492,10 +500,11 @@ def generar_excel_completo_cierre_bytes(
             ws_ing.cell(row=r, column=c).border = BORDE_SUAVE
 
     r_tot_ing = 4 + len(ops_a_volcar)
+    r_fin_ing = r_tot_ing - 1
     ws_ing.cell(row=r_tot_ing, column=2, value="TOTAL INGRESOS").font = Font(bold=True, color=COLOR_PRIMARIO)
     for col_i in (5, 6, 7):
         letra = get_column_letter(col_i)
-        c_t = ws_ing.cell(row=r_tot_ing, column=col_i, value=f"=SUM({letra}4:{letra}{r_tot_ing-1})")
+        c_t = ws_ing.cell(row=r_tot_ing, column=col_i, value=f"=SUM({letra}4:{letra}{r_fin_ing})")
         c_t.font = Font(bold=True, color=COLOR_PRIMARIO)
         c_t.number_format = FORMATO_MONEDA_ARS
     for c in range(1, 8):
@@ -511,7 +520,7 @@ def generar_excel_completo_cierre_bytes(
     # HOJA 3: EGRESOS (Gastos y Retiros)
     # ---------------------------------------------------------
     ws_egr = wb.create_sheet(title="Egresos")
-    ws_egr["A1"] = f"DETALLE DE EGRESOS Y RETIROS — FECHA: {fecha_display}"
+    ws_egr["A1"] = sanitizar_celda_excel(f"DETALLE DE EGRESOS Y RETIROS — FECHA: {fecha_display}")
     ws_egr["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
 
     headers_egr = ["#", "Tipo", "Concepto / Destinatario", "Monto (ARS)"]
@@ -520,23 +529,26 @@ def generar_excel_completo_cierre_bytes(
     _estilizar_encabezado(ws_egr, 3, len(headers_egr))
     ws_egr.freeze_panes = "A4"
 
-    egr_a_volcar = res.gastos_retiros if res.gastos_retiros else [
-        GastoRetiro(tipo="gasto", concepto="Sin egresos ni retiros registrados", monto=Decimal("0.00"))
-    ]
+    egr_a_volcar = (
+        res.gastos_retiros
+        if res.gastos_retiros
+        else [GastoRetiro(tipo="gasto", concepto="Sin egresos ni retiros registrados", monto=Decimal("0.00"))]
+    )
 
     for idx, eg in enumerate(egr_a_volcar, start=1):
         r = 3 + idx
         ws_egr.cell(row=r, column=1, value=idx).alignment = Alignment(horizontal="center")
         ws_egr.cell(row=r, column=2, value=eg.tipo.upper()).alignment = Alignment(horizontal="center")
-        ws_egr.cell(row=r, column=3, value=eg.concepto)
+        ws_egr.cell(row=r, column=3, value=sanitizar_celda_excel(eg.concepto))
         c_m = ws_egr.cell(row=r, column=4, value=float(to_dec(eg.monto)))
         c_m.number_format = FORMATO_MONEDA_ARS
         for c in range(1, 5):
             ws_egr.cell(row=r, column=c).border = BORDE_SUAVE
 
     r_tot_egr = 4 + len(egr_a_volcar)
+    r_fin_egr = r_tot_egr - 1
     ws_egr.cell(row=r_tot_egr, column=3, value="TOTAL EGRESOS Y RETIROS").font = Font(bold=True, color=COLOR_PRIMARIO)
-    c_te = ws_egr.cell(row=r_tot_egr, column=4, value=f"=SUM(D4:D{r_tot_egr-1})")
+    c_te = ws_egr.cell(row=r_tot_egr, column=4, value=f"=SUM(D4:D{r_fin_egr})")
     c_te.font = Font(bold=True, color=COLOR_PRIMARIO)
     c_te.number_format = FORMATO_MONEDA_ARS
     for c in range(1, 5):
@@ -552,7 +564,7 @@ def generar_excel_completo_cierre_bytes(
     # HOJA 4: ARQUEO POR DENOMINACIONES (Billetes ARS)
     # ---------------------------------------------------------
     ws_arq = wb.create_sheet(title="Arqueo_Denominaciones")
-    ws_arq["A1"] = f"ARQUEO DE EFECTIVO POR DENOMINACIÓN — FECHA: {fecha_display}"
+    ws_arq["A1"] = sanitizar_celda_excel(f"ARQUEO DE EFECTIVO POR DENOMINACIÓN — FECHA: {fecha_display}")
     ws_arq["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
 
     headers_arq = ["Denominación (ARS)", "Cantidad de Billetes", "Subtotal (ARS)"]
@@ -562,9 +574,11 @@ def generar_excel_completo_cierre_bytes(
     ws_arq.freeze_panes = "A4"
 
     conteo = arqueo_conteo or {}
+    total_contado_dec = Decimal("0.00")
     for idx, denom in enumerate(DENOMINACIONES_ARS):
         r = 4 + idx
-        cant = int(conteo.get(denom, 0))
+        cant = max(0, int(conteo.get(denom, 0)))
+        total_contado_dec += Decimal(denom) * Decimal(cant)
         c_d = ws_arq.cell(row=r, column=1, value=denom)
         c_d.number_format = FORMATO_MONEDA_ARS
         c_c = ws_arq.cell(row=r, column=2, value=cant)
@@ -575,11 +589,12 @@ def generar_excel_completo_cierre_bytes(
             ws_arq.cell(row=r, column=c).border = BORDE_SUAVE
 
     r_tot_arq = 4 + len(DENOMINACIONES_ARS)
+    r_fin_arq = r_tot_arq - 1
     ws_arq.cell(row=r_tot_arq, column=1, value="TOTAL EFECTIVO CONTADO").font = Font(bold=True, color=COLOR_PRIMARIO)
-    c_tc = ws_arq.cell(row=r_tot_arq, column=2, value=f"=SUM(B4:B{r_tot_arq-1})")
+    c_tc = ws_arq.cell(row=r_tot_arq, column=2, value=f"=SUM(B4:B{r_fin_arq})")
     c_tc.alignment = Alignment(horizontal="center")
     c_tc.font = Font(bold=True, color=COLOR_PRIMARIO)
-    c_ts = ws_arq.cell(row=r_tot_arq, column=3, value=f"=SUM(C4:C{r_tot_arq-1})")
+    c_ts = ws_arq.cell(row=r_tot_arq, column=3, value=f"=SUM(C4:C{r_fin_arq})")
     c_ts.font = Font(bold=True, color=COLOR_PRIMARIO)
     c_ts.number_format = FORMATO_MONEDA_ARS
     for c in range(1, 4):
@@ -609,17 +624,130 @@ def generar_excel_completo_cierre_bytes(
             ", ".join(res.campos_dudosos) if res.campos_dudosos else "Ninguno. Lectura con alta confianza.",
         ),
         ("Comentarios del Cajero / Supervisor", comentario_auditor or "Sin comentarios adicionales."),
-        ("Auditoría Técnica", f"Cierre procesado por usuario autenticado el {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}."),
+        ("Auditoría Técnica", f"Cierre procesado el {ahora.strftime('%d/%m/%Y %H:%M:%S')} (ART)."),
     ]
     for idx, (sec, det) in enumerate(notas, start=4):
-        ws_obs.cell(row=idx, column=1, value=sec).font = Font(bold=True)
-        ws_obs.cell(row=idx, column=2, value=det).alignment = Alignment(wrap_text=True)
+        ws_obs.cell(row=idx, column=1, value=sanitizar_celda_excel(sec)).font = Font(bold=True)
+        ws_obs.cell(row=idx, column=2, value=sanitizar_celda_excel(det)).alignment = Alignment(wrap_text=True)
         ws_obs.cell(row=idx, column=1).border = BORDE_SUAVE
         ws_obs.cell(row=idx, column=2).border = BORDE_SUAVE
         ws_obs.row_dimensions[idx].height = 32
 
     _ajustar_columnas(ws_obs, min_width=25, max_width=80)
     _configurar_impresion(ws_obs, landscape=True)
+
+    # ---------------------------------------------------------
+    # HOJA 1: RESUMEN EJECUTIVO (Con mapeo dinámico de filas)
+    # ---------------------------------------------------------
+    ws_res["A1"] = "ÓPTICA KLIMT — ACTA DE CIERRE DE CAJA DIARIO"
+    ws_res["A1"].font = Font(bold=True, size=15, color=COLOR_PRIMARIO)
+    ws_res.row_dimensions[1].height = 28
+
+    meta = [
+        ("Fecha Contable:", fecha_display, "Cajero / Responsable:", cajero_display),
+        ("Turno:", turno_display, "Supervisor:", supervisor),
+        ("Fecha Generación:", ahora.strftime("%d/%m/%Y %H:%M"), "Estado:", "CONFIRMADO / AUDITADO"),
+    ]
+    for idx, (k1, v1, k2, v2) in enumerate(meta, start=3):
+        ws_res.cell(row=idx, column=1, value=sanitizar_celda_excel(k1)).font = Font(bold=True, color=COLOR_PRIMARIO)
+        ws_res.cell(row=idx, column=2, value=sanitizar_celda_excel(v1))
+        ws_res.cell(row=idx, column=3, value=sanitizar_celda_excel(k2)).font = Font(bold=True, color=COLOR_PRIMARIO)
+        ws_res.cell(row=idx, column=4, value=sanitizar_celda_excel(v2))
+        for c in range(1, 5):
+            ws_res.cell(row=idx, column=c).border = BORDE_SUAVE
+            ws_res.cell(row=idx, column=c).fill = PatternFill(
+                start_color=COLOR_ZEBRA, end_color=COLOR_ZEBRA, fill_type="solid"
+            )
+
+    ws_res.cell(row=7, column=1, value="CONCEPTO CONTABLE").font = Font(bold=True, color="FFFFFF")
+    ws_res.cell(row=7, column=2, value="IMPORTE (ARS)").font = Font(bold=True, color="FFFFFF")
+    ws_res.cell(row=7, column=3, value="ORIGEN / FÓRMULA AUDITORÍA").font = Font(bold=True, color="FFFFFF")
+    _estilizar_encabezado(ws_res, 7, 3)
+    ws_res.freeze_panes = "A8"
+
+    conceptos_specs = [
+        ("fondo_inicial", "1. Fondo Inicial de Caja", float(d["saldo_inicial"]), "Saldo inicial declarado en libreta"),
+        ("ingresos_brutos", "2. Total Ingresos Brutos (Todos los medios)", f"=Ingresos!E{r_tot_ing}", "Suma hoja Ingresos"),
+        (
+            "ventas_efectivo",
+            "   - Ventas en Efectivo",
+            f'=SUMIF(Ingresos!C4:C{r_fin_ing},"Efectivo",Ingresos!E4:E{r_fin_ing})',
+            "Subtotal Efectivo",
+        ),
+        (
+            "ventas_mp",
+            "   - Ventas Mercado Pago (Bruto)",
+            f'=SUMIF(Ingresos!C4:C{r_fin_ing},"Mercado Pago*",Ingresos!E4:E{r_fin_ing})',
+            "Incluye IVA 21%",
+        ),
+        (
+            "ventas_bbva",
+            "   - Ventas Payway BBVA (Bruto)",
+            f'=SUMIF(Ingresos!C4:C{r_fin_ing},"Payway BBVA",Ingresos!E4:E{r_fin_ing})',
+            "Incluye IVA 21%",
+        ),
+        (
+            "ventas_provincia",
+            "   - Ventas Posnet Provincia",
+            f'=SUMIF(Ingresos!C4:C{r_fin_ing},"Posnet Provincia",Ingresos!E4:E{r_fin_ing})',
+            "Posnet Banco Provincia",
+        ),
+        ("iva_total", "3. Total IVA Discriminado (21% sobre MP y BBVA)", f"=Ingresos!G{r_tot_ing}", "IVA Crédito/Débito Fiscal"),
+        ("egresos_total", "4. Total Egresos (Gastos y Retiros)", f"=Egresos!D{r_tot_egr}", "Suma hoja Egresos"),
+        ("efectivo_esperado", "5. Total Esperado en Efectivo (Caja Física)", None, "Fondo Inicial + Efectivo - Egresos"),
+        ("efectivo_contado", "6. Total Contado en Arqueo de Billetes", f"=Arqueo_Denominaciones!C{r_tot_arq}", "Suma hoja Arqueo"),
+        ("dif_arqueo", "7. Diferencia de Arqueo (Contado - Esperado)", None, "Positivo = Sobrante | Negativo = Faltante"),
+        ("caja_cuaderno", "8. Total Declarado en Cuaderno (Cierre Celia)", float(d["caja_cuaderno"]), "Valor total anotado en cuaderno"),
+        ("general_esperado", "9. Total General Esperado (Efectivo + Tarjetas/QR)", None, "Fondo Inicial + Ingresos Totales - Egresos"),
+        ("dif_cuaderno", "10. Diferencia vs. Cuaderno", None, "Comparación cuaderno vs sistema"),
+    ]
+
+    fila_por_clave = {clave: 8 + idx for idx, (clave, _, _, _) in enumerate(conceptos_specs)}
+
+    for clave, concepto, valor_o_formula, nota in conceptos_specs:
+        r = fila_por_clave[clave]
+        if clave == "efectivo_esperado":
+            formula_final = f"=B{fila_por_clave['fondo_inicial']}+B{fila_por_clave['ventas_efectivo']}-B{fila_por_clave['egresos_total']}"
+        elif clave == "dif_arqueo":
+            formula_final = f"=B{fila_por_clave['efectivo_contado']}-B{fila_por_clave['efectivo_esperado']}"
+        elif clave == "general_esperado":
+            formula_final = f"=B{fila_por_clave['fondo_inicial']}+B{fila_por_clave['ingresos_brutos']}-B{fila_por_clave['egresos_total']}"
+        elif clave == "dif_cuaderno":
+            formula_final = f"=B{fila_por_clave['caja_cuaderno']}-B{fila_por_clave['general_esperado']}"
+        else:
+            formula_final = valor_o_formula
+
+        c1 = ws_res.cell(row=r, column=1, value=sanitizar_celda_excel(concepto))
+        c2 = ws_res.cell(row=r, column=2, value=formula_final)
+        c3 = ws_res.cell(row=r, column=3, value=sanitizar_celda_excel(nota))
+
+        c1.border = BORDE_SUAVE
+        c2.border = BORDE_SUAVE
+        c3.border = BORDE_SUAVE
+        c2.number_format = FORMATO_MONEDA_ARS
+        c3.font = Font(italic=True, color="595959", size=10)
+
+        if clave in ("fondo_inicial", "ingresos_brutos", "egresos_total", "efectivo_esperado", "efectivo_contado", "caja_cuaderno", "general_esperado"):
+            c1.font = Font(bold=True)
+            c2.font = Font(bold=True)
+
+        if clave in ("dif_arqueo", "dif_cuaderno"):
+            dif_ref = (
+                (total_contado_dec - d["efectivo_esperado_caja"])
+                if clave == "dif_arqueo"
+                else d["diferencia_cuaderno"]
+            )
+            bg = COLOR_ROJO_BG if dif_ref < Decimal("0.00") else COLOR_VERDE_BG
+            fg = COLOR_ROJO_TXT if dif_ref < Decimal("0.00") else COLOR_VERDE_TXT
+            fill_dif = PatternFill(start_color=bg, end_color=bg, fill_type="solid")
+            for col_i in (1, 2, 3):
+                cell_d = ws_res.cell(row=r, column=col_i)
+                cell_d.fill = fill_dif
+                cell_d.font = Font(bold=True, color=fg, size=11)
+                cell_d.border = BORDE_TOTAL
+
+    _ajustar_columnas(ws_res, min_width=18, max_width=52)
+    _configurar_impresion(ws_res, landscape=False)
 
     output = io.BytesIO()
     wb.save(output)
@@ -628,23 +756,25 @@ def generar_excel_completo_cierre_bytes(
 
 def asegurar_archivo_maestro():
     if not os.path.exists(ARCHIVO_MAESTRO):
-        wb = Workbook()
-        ws = wb.active
-        _construir_hoja_historico(ws, [])
-        tmp_path = f"{ARCHIVO_MAESTRO}.tmp"
-        wb.save(tmp_path)
-        os.replace(tmp_path, ARCHIVO_MAESTRO)
+        with bloqueo_archivo():
+            if not os.path.exists(ARCHIVO_MAESTRO):
+                wb = Workbook()
+                ws = wb.active
+                _construir_hoja_historico(ws, [])
+                buf = io.BytesIO()
+                wb.save(buf)
+                guardar_bytes_atomico(ARCHIVO_MAESTRO, buf.getvalue())
 
 
 def guardar_y_ordenar_en_mensual(res: CierreDia):
-    """Guarda de forma atómica en el consolidado mensual evitando duplicados por fecha."""
+    """Guarda de forma atómica y segura en el consolidado mensual evitando pérdida de datos."""
     nueva_fila = construir_fila_historico(res)
     fecha_nueva = nueva_fila[0]
-    filas_existentes = []
 
-    if os.path.exists(ARCHIVO_MAESTRO):
-        try:
-            wb_viejo = load_workbook(ARCHIVO_MAESTRO)
+    with bloqueo_archivo():
+        filas_existentes = []
+        if os.path.exists(ARCHIVO_MAESTRO):
+            wb_viejo = load_workbook(ARCHIVO_MAESTRO, data_only=False)
             ws_viejo = wb_viejo.active
             for row in ws_viejo.iter_rows(min_row=4, values_only=True):
                 if not row or not row[0] or str(row[0]).startswith(("TOTAL", "ÓPTICA", "OPTICA")):
@@ -654,18 +784,16 @@ def guardar_y_ordenar_en_mensual(res: CierreDia):
                     while len(fila_limpia) < len(COLUMNAS_HISTORICO):
                         fila_limpia.append(0.0)
                     filas_existentes.append(fila_limpia)
-        except Exception:
-            pass
 
-    filas_existentes.append(nueva_fila)
+        filas_existentes.append(nueva_fila)
 
-    wb_nuevo = Workbook()
-    ws_nuevo = wb_nuevo.active
-    _construir_hoja_historico(ws_nuevo, filas_existentes)
+        wb_nuevo = Workbook()
+        ws_nuevo = wb_nuevo.active
+        _construir_hoja_historico(ws_nuevo, filas_existentes)
 
-    tmp_path = f"{ARCHIVO_MAESTRO}.tmp"
-    wb_nuevo.save(tmp_path)
-    os.replace(tmp_path, ARCHIVO_MAESTRO)
+        buf = io.BytesIO()
+        wb_nuevo.save(buf)
+        guardar_bytes_atomico(ARCHIVO_MAESTRO, buf.getvalue())
 
 
 asegurar_archivo_maestro()
@@ -674,20 +802,17 @@ asegurar_archivo_maestro()
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
-try:
-    app_password = st.secrets.get("APP_PASSWORD", APP_PASSWORD)
-except Exception:
-    app_password = APP_PASSWORD
+app_password = obtener_password_configurada()
+
+if not app_password:
+    st.error("Configuración incompleta: definí APP_PASSWORD en Streamlit Secrets o en el entorno.")
+    st.stop()
 
 if not st.session_state.autenticado:
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        if os.path.exists("logo.png"):
-            st.image("logo.png", width=180)
-        elif os.path.exists("logo.jpg"):
-            st.image("logo.jpg", width=180)
-
+        mostrar_logo(width=180)
         st.markdown("## Acceso Restringido — Óptica Klimt")
         st.write("Ingrese la contraseña institucional para continuar.")
         pwd = st.text_input("Contraseña:", type="password")
@@ -701,11 +826,7 @@ if not st.session_state.autenticado:
 
 # --- MENÚ LATERAL ---
 with st.sidebar:
-    if os.path.exists("logo.png"):
-        st.image("logo.png", width=200)
-    elif os.path.exists("logo.jpg"):
-        st.image("logo.jpg", width=200)
-    else:
+    if not mostrar_logo(width=200):
         st.markdown("### Óptica Klimt")
 
     st.write("Tablero de Comando Gerencial")
@@ -720,6 +841,8 @@ with st.sidebar:
     st.divider()
     if st.button("Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
+        st.session_state.pop("resultado", None)
+        st.session_state.pop("guardado_maestro", None)
         st.rerun()
 
 # --- VISTA 1: TABLERO DE COMANDO (PANTALLA PRINCIPAL DIRECTA PARA MARTÍN) ---
@@ -729,9 +852,13 @@ if menu_opcion == "Tablero de Comando (Resumen)":
 
     try:
         df_master = pd.read_excel(ARCHIVO_MAESTRO, skiprows=2)
-        df_master = df_master.dropna(subset=["Fecha"])
-        df_master = df_master[~df_master["Fecha"].astype(str).str.contains("TOTAL|OPTICA|ÓPTICA", case=False)]
-    except Exception:
+        if "Fecha" in df_master.columns:
+            df_master = df_master.dropna(subset=["Fecha"])
+            df_master = df_master[~df_master["Fecha"].astype(str).str.contains("TOTAL|OPTICA|ÓPTICA", case=False)]
+        else:
+            df_master = pd.DataFrame(columns=COLUMNAS_HISTORICO)
+    except Exception as e_read:
+        st.warning(f"No se pudo leer el consolidado actual ({e_read}). Se muestra vista vacía segura.")
         df_master = pd.DataFrame(columns=COLUMNAS_HISTORICO)
 
     if not df_master.empty:
@@ -741,13 +868,13 @@ if menu_opcion == "Tablero de Comando (Resumen)":
             else:
                 df_master[col_num] = 0.0
 
-        t_efectivo = Decimal(str(df_master["Efectivo"].sum())).quantize(Decimal("0.01"))
-        t_mp_neto = Decimal(str(df_master["MP Neto"].sum())).quantize(Decimal("0.01"))
-        t_mp_iva = Decimal(str(df_master["MP IVA (21%)"].sum())).quantize(Decimal("0.01"))
-        t_bbva_neto = Decimal(str(df_master["BBVA Neto"].sum())).quantize(Decimal("0.01"))
-        t_bbva_iva = Decimal(str(df_master["BBVA IVA (21%)"].sum())).quantize(Decimal("0.01"))
-        t_provincia = Decimal(str(df_master["Provincia"].sum())).quantize(Decimal("0.01"))
-        t_celia = Decimal(str(df_master["Celia / Toti"].sum())).quantize(Decimal("0.01"))
+        t_efectivo = sumar_serie_decimal(df_master, "Efectivo")
+        t_mp_neto = sumar_serie_decimal(df_master, "MP Neto")
+        t_mp_iva = sumar_serie_decimal(df_master, "MP IVA (21%)")
+        t_bbva_neto = sumar_serie_decimal(df_master, "BBVA Neto")
+        t_bbva_iva = sumar_serie_decimal(df_master, "BBVA IVA (21%)")
+        t_provincia = sumar_serie_decimal(df_master, "Provincia")
+        t_celia = sumar_serie_decimal(df_master, "Celia / Toti")
 
         t_mp_total = t_mp_neto + t_mp_iva
         t_bbva_total = t_bbva_neto + t_bbva_iva
@@ -804,28 +931,31 @@ if menu_opcion == "Tablero de Comando (Resumen)":
 
     col_ex1, col_ex2 = st.columns(2)
     with col_ex1:
-        with open(ARCHIVO_MAESTRO, "rb") as f:
-            st.download_button(
-                label="Descargar Excel Consolidado Mensual (.xlsx)",
-                data=f.read(),
-                file_name=ARCHIVO_MAESTRO,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True,
-            )
+        if os.path.exists(ARCHIVO_MAESTRO):
+            with open(ARCHIVO_MAESTRO, "rb") as f:
+                st.download_button(
+                    label="Descargar Excel Consolidado Mensual (.xlsx)",
+                    data=f.read(),
+                    file_name=ARCHIVO_MAESTRO,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True,
+                )
     with col_ex2:
         with st.expander("Importar o restaurar Excel mensual existente (.xlsx)"):
             excel_subido = st.file_uploader("Seleccionar planilla .xlsx", type=["xlsx"], key="importar_maestro")
-            if excel_subido is not None:
+            confirmar_restauracion = st.checkbox(
+                "Confirmo que deseo reemplazar el consolidado mensual actual por este archivo",
+                key="confirmar_restauracion",
+            )
+            if excel_subido is not None and confirmar_restauracion:
                 try:
                     wb_test = load_workbook(io.BytesIO(excel_subido.getvalue()))
                     if "Cierre Mensual" not in wb_test.sheetnames and "Historico_Mensual" not in wb_test.sheetnames:
                         st.error("El archivo subido no corresponde al formato oficial de Óptica Klimt.")
                     else:
-                        tmp_imp = f"{ARCHIVO_MAESTRO}.tmp"
-                        with open(tmp_imp, "wb") as f_out:
-                            f_out.write(excel_subido.getbuffer())
-                        os.replace(tmp_imp, ARCHIVO_MAESTRO)
+                        with bloqueo_archivo():
+                            guardar_bytes_atomico(ARCHIVO_MAESTRO, excel_subido.getvalue())
                         st.success("Planilla consolidada restaurada correctamente.")
                         st.rerun()
                 except Exception as err:
@@ -873,29 +1003,44 @@ elif menu_opcion == "Procesar Cierre Diario":
             st.warning(f"Revisar valores marcados como poco claros: {', '.join(res.campos_dudosos)}")
 
         # --- ARQUEO DE BILLETES Y DATOS DE AUDITORÍA OPCIONALES ---
+        turno_in = res.turno or "Único"
+        cajero_in = res.cajero or "Celia"
+        sup_in = "Martín"
+        comentario_in = res.observaciones or ""
+        arqueo_dict: dict[int, int] = {denom: 0 for denom in DENOMINACIONES_ARS}
+
         with st.expander("Arqueo de Billetes y Datos de Auditoría (Opcional para el Excel)", expanded=False):
             col_m1, col_m2, col_m3 = st.columns(3)
-            turno_in = col_m1.text_input("Turno:", value=res.turno or "Único")
-            cajero_in = col_m2.text_input("Cajero:", value=res.cajero or "Celia")
-            sup_in = col_m3.text_input("Supervisor:", value="Martín")
-            comentario_in = st.text_input("Observaciones del cierre:", value=res.observaciones or "")
+            turno_in = col_m1.text_input("Turno:", value=turno_in)
+            cajero_in = col_m2.text_input("Cajero:", value=cajero_in)
+            sup_in = col_m3.text_input("Supervisor:", value=sup_in)
+            comentario_in = st.text_input("Observaciones del cierre:", value=comentario_in)
 
             res.turno = turno_in
             res.cajero = cajero_in
 
             st.markdown("**Conteo de Billetes (ARS):**")
             cols_billetes = st.columns(5)
-            arqueo_dict: dict[int, int] = {}
             for idx_b, denom in enumerate(DENOMINACIONES_ARS):
                 with cols_billetes[idx_b % 5]:
                     arqueo_dict[denom] = st.number_input(
                         f"$ {denom:,}", min_value=0, step=1, value=0, key=f"bill_{denom}"
                     )
 
+            total_billetes_ui = sum(
+                (Decimal(denom) * Decimal(cant) for denom, cant in arqueo_dict.items()),
+                Decimal("0.00"),
+            )
+            dif_billetes_ui = total_billetes_ui - d["efectivo_esperado_caja"]
+            a1, a2, a3 = st.columns(3)
+            a1.metric("Efectivo Esperado en Caja", f"$ {d['efectivo_esperado_caja']:,.2f}")
+            a2.metric("Total Billetes Contados", f"$ {total_billetes_ui:,.2f}")
+            a3.metric("Diferencia Arqueo", f"$ {dif_billetes_ui:,.2f}")
+
         st.divider()
         st.subheader("Exportación y Confirmación")
 
-        fecha_slug = res.fecha.strftime("%Y-%m-%d") if res.fecha else datetime.now().strftime("%Y-%m-%d")
+        fecha_slug = res.fecha.strftime("%Y-%m-%d") if res.fecha else ahora_arg().strftime("%Y-%m-%d")
         nombre_archivo_cierre = (
             f"Cierre_Caja_{fecha_slug}_{sanitizar_nombre_archivo(res.turno or 'Unico')}_"
             f"{sanitizar_nombre_archivo(res.cajero or 'Celia')}.xlsx"
@@ -905,9 +1050,12 @@ elif menu_opcion == "Procesar Cierre Diario":
         with col_dl1:
             if not st.session_state.get("guardado_maestro", False):
                 if st.button("Confirmar y Sumar al Consolidado Mensual", type="primary", use_container_width=True):
-                    guardar_y_ordenar_en_mensual(res)
-                    st.session_state.guardado_maestro = True
-                    st.success("Cierre confirmado y registrado en el consolidado mensual.")
+                    try:
+                        guardar_y_ordenar_en_mensual(res)
+                        st.session_state.guardado_maestro = True
+                        st.success("Cierre confirmado y registrado en el consolidado mensual.")
+                    except Exception as e_save:
+                        st.error(f"No se pudo guardar en el consolidado mensual: {e_save}")
             else:
                 st.info("Este cierre ya fue confirmado en el consolidado mensual.")
 
