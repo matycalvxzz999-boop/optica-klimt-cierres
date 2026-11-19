@@ -1,14 +1,18 @@
 import io
+import logging
 import os
+import random
 import time
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal, Optional
 
 from google import genai
 from google.genai import types
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger("optica_klimt.extractor")
 
 MedioPago = Literal[
     "efectivo",
@@ -26,11 +30,33 @@ class Operacion(BaseModel):
     medio_pago: MedioPago
     confianza: Literal["alta", "media", "baja"] = "alta"
 
+    @field_validator("monto", mode="before")
+    @classmethod
+    def validar_monto_op(cls, v):
+        if v is None or v == "":
+            return None
+        try:
+            dec = Decimal(str(v).replace("$", "").strip())
+            return dec
+        except (InvalidOperation, ValueError):
+            return None
+
 
 class GastoRetiro(BaseModel):
     tipo: Literal["gasto", "retiro"]
     concepto: str
     monto: Optional[Decimal] = None
+
+    @field_validator("monto", mode="before")
+    @classmethod
+    def validar_monto_gasto(cls, v):
+        if v is None or v == "":
+            return None
+        try:
+            dec = Decimal(str(v).replace("$", "").strip())
+            return dec
+        except (InvalidOperation, ValueError):
+            return None
 
 
 class CierreDia(BaseModel):
@@ -59,28 +85,45 @@ REGLAS ESTRICTAS DE EXTRACCIÓN:
 3. Fecha contable en formato ISO (AAAA-MM-DD). Revisá el margen izquierdo vertical (ej: "17-11-26" -> "2026-11-17"). Si falta el año, asumí 2026.
 4. Saldo inicial ("CAJA $13.000" en el margen izquierdo): cargalo en "saldo_inicial".
 5. CLASIFICACIÓN OBLIGATORIA DE MEDIO DE PAGO (mirar columna TARJETA y columna MODO):
-   - Si el monto está en la columna EFECTIVO -> medio_pago = "efectivo".
-   - Si el monto está en la columna TARJETA, leé la aclaración en MODO:
-     * "QR MP", "QR", "MP", "DEBITO MP", "MP TRANS" -> "qr_mp".
-     * "Payway", "BBVA", "Visa", "Master" -> "payway_bbva".
-     * "posnet B PCIA", "B PCIA", "PCIA", "Provincia" -> "posnet_provincia".
-     * "Transferencia" (bancaria directa) -> "transferencia".
-     * Si está en TARJETA y no especifica modo -> "payway_bbva".
+  - Si el monto está en la columna EFECTIVO -> medio_pago = "efectivo".
+  - Si el monto está en la columna TARJETA, leé la aclaración en MODO:
+    * "QR MP", "QR", "MP", "DEBITO MP", "MP TRANS" -> "qr_mp".
+    * "Payway", "BBVA", "Visa", "Master" -> "payway_bbva".
+    * "posnet B PCIA", "B PCIA", "PCIA", "Provincia" -> "posnet_provincia".
+    * "Transferencia" (bancaria directa) -> "transferencia".
+    * Si está en TARJETA y no especifica modo -> "payway_bbva".
 6. SALIDAS (columna derecha "SALIDA"):
-   - Registrá cada ítem en "gastos_retiros".
-   - Si dice "RETIRO DE CAJA", "Celia", "Toti" -> tipo = "retiro".
-   - Si dice "Comida", "Kiosco", "Limp", etc. -> tipo = "gasto".
+  - Registrá cada ítem en "gastos_retiros".
+  - Si dice "RETIRO DE CAJA", "Celia", "Toti" -> tipo = "retiro".
+  - Si dice "Comida", "Kiosco", "Limp", etc. -> tipo = "gasto".
 7. SUBTOTALES DEL CUADERNO:
-   - Copiá en total_efectivo_cuaderno, total_tarjetas_cuaderno y caja_total_cuaderno los totales escritos al pie de la hoja (si hay un número tachado y corregido abajo, tomá el valor final vigente, ej: $330.000).
+  - Copiá en total_efectivo_cuaderno, total_tarjetas_cuaderno y caja_total_cuaderno los totales escritos al pie de la hoja (si hay un número tachado y corregido abajo, tomá el valor final vigente, ej: $330.000).
 8. Devolvé ÚNICAMENTE JSON válido ajustado al esquema CierreDia.
 """
 
 
+def _obtener_api_key() -> Optional[str]:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if api_key:
+        return api_key.strip()
+    try:
+        import streamlit as st
+
+        secret_key = st.secrets.get("GEMINI_API_KEY")
+        if secret_key:
+            return str(secret_key).strip()
+    except Exception:
+        pass
+    return None
+
+
 def _preparar_imagen(img_path_or_bytes: bytes | str) -> Image.Image:
     if isinstance(img_path_or_bytes, bytes):
-        img = Image.open(io.BytesIO(img_path_or_bytes))
+        with Image.open(io.BytesIO(img_path_or_bytes)) as raw_img:
+            img = raw_img.copy()
     else:
-        img = Image.open(img_path_or_bytes)
+        with Image.open(img_path_or_bytes) as raw_img:
+            img = raw_img.copy()
 
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
@@ -90,7 +133,7 @@ def _preparar_imagen(img_path_or_bytes: bytes | str) -> Image.Image:
 
 
 def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = _obtener_api_key()
     if not api_key:
         raise ValueError("Falta configurar GEMINI_API_KEY en los Secrets de Streamlit o archivo .env.")
 
@@ -101,7 +144,6 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
 
     img = _preparar_imagen(img_path_or_bytes)
 
-    # Modelo principal actual de producción + respaldo automático
     modelos_candidatos = [
         "gemini-3.8-flash",
         "gemini-3.1-pro-preview",
@@ -133,13 +175,17 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
             except Exception as e:
                 ultimo_error = e
                 err_str = str(e)
-                # Errores transitorios de red o saturación (503 / 429 / Timeout)
-                if any(code in err_str for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "504", "DEADLINE")):
-                    espera = 2.0 * (intento + 1)
+                if any(
+                    code in err_str
+                    for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "504", "DEADLINE")
+                ):
+                    jitter = random.uniform(0.1, 0.7)
+                    espera = (2.0 * (intento + 1)) + jitter
+                    logger.warning("Reintento %s/%s para modelo %s tras error transitorio: %s", intento + 1, max_reintentos, modelo, err_str)
                     time.sleep(espera)
                     continue
-                # Si el modelo no está disponible en la cuenta (404), salta al siguiente candidato
                 if "404" in err_str or "NOT_FOUND" in err_str:
+                    logger.warning("Modelo %s no disponible (404), pasando al siguiente candidato.", modelo)
                     break
                 raise RuntimeError(f"Error al interpretar la planilla con {modelo}: {err_str}") from e
 
