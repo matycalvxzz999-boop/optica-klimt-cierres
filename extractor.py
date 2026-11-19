@@ -140,24 +140,31 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
 
     client = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=45000),
+        http_options=types.HttpOptions(timeout=45000, api_version="v1beta"),
     )
 
     img = _preparar_imagen(img_path_or_bytes)
     anio_actual = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).year
     prompt = SYSTEM_PROMPT.replace("{ANIO_ACTUAL}", str(anio_actual))
 
+    # Modelos rápidos primero. (gemini-3.1-pro-preview se sacó: es lento y daba 404.)
     modelos_candidatos = [
         "gemini-3.8-flash",
-        "gemini-3.1-pro-preview",
+        "gemini-2.5-flash",
     ]
+    inicio_total = time.monotonic()
+    presupuesto_seg = 100  # tiempo máximo total antes de rendirse y mostrar el error
 
     ultimo_error: Optional[Exception] = None
     hubo_error_transitorio = False
+    errores_por_modelo: dict[str, str] = {}
 
     for modelo in modelos_candidatos:
-        max_reintentos = 3
+        max_reintentos = 2
         for intento in range(max_reintentos):
+            if time.monotonic() - inicio_total > presupuesto_seg:
+                errores_por_modelo.setdefault(modelo, "Omitido: se agotó el tiempo máximo de espera")
+                break
             try:
                 response = client.models.generate_content(
                     model=modelo,
@@ -178,6 +185,7 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
 
             except Exception as e:
                 ultimo_error = e
+                errores_por_modelo[modelo] = str(e)[:250]
                 err_str = str(e)
                 if any(
                     code in err_str
@@ -194,12 +202,13 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
                     break
                 raise RuntimeError(f"Error al interpretar la planilla con {modelo}: {err_str}") from e
 
+    detalle_modelos = " || ".join(f"{m}: {err}" for m, err in errores_por_modelo.items())
     if hubo_error_transitorio:
         raise RuntimeError(
             f"Los servidores de IA están experimentando alta demanda temporal (503). "
-            f"Aguardá 15 segundos y volvé a presionar 'Procesar Cierre con IA'. Detalle: {ultimo_error}"
+            f"Aguardá 15 segundos y volvé a presionar 'Procesar Cierre con IA'. Detalle por modelo: {detalle_modelos}"
         )
     raise RuntimeError(
         f"Ningún modelo respondió ({', '.join(modelos_candidatos)}). Verificá GEMINI_API_KEY, "
-        f"sus permisos y los nombres de modelo. Detalle: {ultimo_error}"
+        f"sus permisos y los nombres de modelo. Detalle por modelo: {detalle_modelos}"
     )
