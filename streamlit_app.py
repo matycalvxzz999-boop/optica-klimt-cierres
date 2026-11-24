@@ -14,7 +14,6 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 from openpyxl import Workbook, load_workbook
-from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from supabase import Client, create_client
@@ -62,26 +61,28 @@ st.markdown(
 )
 
 # --- CONSTANTES DE DISEÑO EXCEL ---
-COLOR_PRIMARIO = "1F4E78"
-COLOR_SECUNDARIO = "D9E1F2"
-COLOR_ZEBRA = "F2F5F9"
-COLOR_VERDE_BG = "E2EFDA"
-COLOR_VERDE_TXT = "274E13"
-COLOR_ROJO_BG = "FCE4D6"
-COLOR_ROJO_TXT = "9C0006"
+COLOR_PRIMARIO = "1F4E78"      # Azul oscuro institucional
+COLOR_SECUNDARIO = "D9E1F2"    # Azul claro totales
+COLOR_RESUMEN_HDR = "2F5597"   # Azul medio resumen
+COLOR_INGRESOS_HDR = "1E6B52"  # Verde oscuro ingresos
+COLOR_EGRESOS_HDR = "833C0C"   # Marrón/ámbar oscuro egresos/retiros
+COLOR_AUD_HDR = "3B3838"       # Gris oscuro auditoría
+COLOR_ZEBRA = "F4F7FB"
 
 FORMATO_MONEDA_ARS = '$ #,##0.00;-$ #,##0.00;"$ 0.00"'
 
 BORDE_SUAVE = Border(
-    bottom=Side(style="thin", color="D9D9D9"),
-    top=Side(style="thin", color="D9D9D9"),
-    left=Side(style="thin", color="D9D9D9"),
-    right=Side(style="thin", color="D9D9D9"),
+    bottom=Side(style="thin", color="D0D7DE"),
+    top=Side(style="thin", color="D0D7DE"),
+    left=Side(style="thin", color="D0D7DE"),
+    right=Side(style="thin", color="D0D7DE"),
 )
 
 BORDE_TOTAL = Border(
     top=Side(style="thin", color=COLOR_PRIMARIO),
     bottom=Side(style="double", color=COLOR_PRIMARIO),
+    left=Side(style="thin", color="D0D7DE"),
+    right=Side(style="thin", color="D0D7DE"),
 )
 
 COLUMNAS_HISTORICO = [
@@ -577,7 +578,7 @@ def obtener_todos_los_cierres() -> list[dict[str, Any]]:
 def obtener_auditoria() -> list[dict[str, Any]]:
     sb = obtener_cliente_supabase()
     if sb is not None:
-        resp = sb.table("auditoria_cierres").select("*").order("creado_en", desc=True).limit(500).execute()
+        resp = sb.table("auditoria_cierres").select("*").order("creado_en", desc=True).limit(200).execute()
         return resp.data or []
     return list(reversed(_leer_auditoria_local()))
 
@@ -645,24 +646,38 @@ def guardar_cierre_persistente(
     return True, "Cierre guardado y registrado en auditoría."
 
 
-# --- MOTOR DE EXCEL ÚNICO CONSOLIDADO (6 HOJAS) ---
-def _configurar_impresion(ws, landscape: bool = True):
-    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE if landscape else ws.ORIENTATION_PORTRAIT
+# --- MOTOR DE EXCEL EN UNA SOLA HOJA ORDENADA ---
+def _configurar_impresion_hoja_unica(ws):
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
-    ws.oddHeader.center.text = "ÓPTICA KLIMT - CONSOLIDADO DE CIERRES DE CAJA"
+    ws.oddHeader.center.text = "ÓPTICA KLIMT - PLANILLA DE CIERRES DE CAJA"
     ws.oddHeader.center.size = 10
     ws.oddHeader.center.font = "Calibri,Bold"
     ws.oddFooter.left.text = f"Generado: {ahora_arg().strftime('%d/%m/%Y %H:%M')}"
     ws.oddFooter.right.text = "Página &P de &N"
 
 
-def _estilizar_encabezado(ws, row_idx: int, num_cols: int, color_hex: str = COLOR_PRIMARIO):
+def _estilizar_banner_seccion(ws, row_idx: int, num_cols: int, titulo: str, color_hex: str):
+    ws.row_dimensions[row_idx].height = 24
     fill = PatternFill(start_color=color_hex, end_color=color_hex, fill_type="solid")
     font = Font(color="FFFFFF", bold=True, size=11)
-    ws.row_dimensions[row_idx].height = 26
+    for col in range(1, num_cols + 1):
+        cell = ws.cell(row=row_idx, column=col)
+        cell.fill = fill
+        cell.font = font
+        cell.border = BORDE_SUAVE
+        if col == 1:
+            cell.value = sanitizar_celda_excel(titulo)
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+
+def _estilizar_encabezado(ws, row_idx: int, num_cols: int, color_hex: str = COLOR_PRIMARIO):
+    fill = PatternFill(start_color=color_hex, end_color=color_hex, fill_type="solid")
+    font = Font(color="FFFFFF", bold=True, size=10)
+    ws.row_dimensions[row_idx].height = 24
     for col in range(1, num_cols + 1):
         cell = ws.cell(row=row_idx, column=col)
         cell.fill = fill
@@ -671,38 +686,117 @@ def _estilizar_encabezado(ws, row_idx: int, num_cols: int, color_hex: str = COLO
         cell.border = BORDE_SUAVE
 
 
-def _ajustar_columnas(ws, min_width: int = 14, max_width: int = 48):
+def _ajustar_columnas_hoja_unica(ws):
+    anchos_fijos = {
+        1: 14,  # Fecha / Concepto
+        2: 14,  # Turno / Importe
+        3: 14,  # Cajero
+        4: 15,  # Efectivo
+        5: 15,  # MP Neto
+        6: 15,  # MP IVA
+        7: 15,  # BBVA Neto
+        8: 15,  # BBVA IVA
+        9: 15,  # Provincia
+        10: 14, # Gastos
+        11: 15, # Celia / Toti
+        12: 16, # Diferencia Caja
+        13: 42, # Observaciones / Detalle
+    }
     for col in ws.columns:
-        max_len = 0
-        col_letter = get_column_letter(col[0].column)
+        col_idx = col[0].column
+        col_letter = get_column_letter(col_idx)
+        max_len = anchos_fijos.get(col_idx, 14)
         for cell in col:
-            if cell.row == 1:
+            if cell.row <= 2:
                 continue
             val = str(cell.value or "")
             if val.startswith("="):
                 val = "$ 999,999.00"
-            if len(val) > max_len:
-                max_len = len(val)
-        ws.column_dimensions[col_letter].width = min(max(max_len + 4, min_width), max_width)
+            if len(val) + 3 > max_len:
+                max_len = min(len(val) + 3, 55)
+        ws.column_dimensions[col_letter].width = max_len
 
 
 def _guardar_historico_local_desde_registros(registros: list[dict[str, Any]]):
+    excel_bytes = generar_excel_unico_bytes(
+        registros=registros,
+        eventos_auditoria=_leer_auditoria_local(),
+        etiqueta_rango="Consolidado_Local",
+    )
+    with bloqueo_archivo():
+        guardar_bytes_atomico(ARCHIVO_MAESTRO_LOCAL, excel_bytes)
+
+
+def generar_excel_unico_bytes(
+    registros: list[dict[str, Any]],
+    eventos_auditoria: list[dict[str, Any]],
+    etiqueta_rango: str,
+) -> bytes:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Historico_Mensual"
-    ws["A1"] = "ÓPTICA KLIMT - CONSOLIDADO MENSUAL DE CAJA (CON DISCRIMINACIÓN DE IVA 21%)"
-    ws["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
-    ws.row_dimensions[1].height = 24
+    ws.title = "Optica_Klimt_Cierres"
+    ws.views.sheetView[0].showGridLines = True
 
-    ws.append([])
-    ws.append(COLUMNAS_HISTORICO)
-    _estilizar_encabezado(ws, 3, len(COLUMNAS_HISTORICO))
-    ws.freeze_panes = "A4"
+    num_cols_cierres = 13
+    fecha_emision = ahora_arg().strftime("%d/%m/%Y %H:%M")
 
-    for idx_f, r_data in enumerate(registros):
-        fila = [
+    # --- ENCABEZADO PRINCIPAL CON TÍTULO Y FECHA ---
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=num_cols_cierres)
+    c_tit = ws.cell(row=1, column=1, value="ÓPTICA KLIMT — PLANILLA GENERAL DE CIERRES DE CAJA")
+    c_tit.font = Font(bold=True, size=15, color=COLOR_PRIMARIO)
+    c_tit.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=num_cols_cierres)
+    c_sub = ws.cell(
+        row=2,
+        column=1,
+        value=sanitizar_celda_excel(f"Período / Filtro: {etiqueta_rango}   |   Fecha y hora de emisión: {fecha_emision} (ART)"),
+    )
+    c_sub.font = Font(bold=True, size=10, color="333333")
+    c_sub.fill = PatternFill(start_color="EAF0F7", end_color="EAF0F7", fill_type="solid")
+    c_sub.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[2].height = 20
+
+    fila_actual = 4
+
+    # --- CUADRO 1: DETALLE DE CIERRES DIARIOS ---
+    _estilizar_banner_seccion(
+        ws,
+        fila_actual,
+        num_cols_cierres,
+        f"1. CIERRES DIARIOS POR FECHA Y TURNO — {etiqueta_rango}",
+        COLOR_PRIMARIO,
+    )
+    fila_actual += 1
+
+    headers_cierres = [
+        "Fecha",
+        "Turno",
+        "Cajero",
+        "Efectivo",
+        "MP Neto",
+        "MP IVA (21%)",
+        "BBVA Neto",
+        "BBVA IVA (21%)",
+        "Provincia",
+        "Gastos",
+        "Celia / Toti",
+        "Diferencia Caja",
+        "Observaciones / Detalle",
+    ]
+    for idx_h, h_txt in enumerate(headers_cierres, start=1):
+        ws.cell(row=fila_actual, column=idx_h, value=h_txt)
+    _estilizar_encabezado(ws, fila_actual, num_cols_cierres, COLOR_RESUMEN_HDR)
+    fila_actual += 1
+
+    fila_inicio_cierres = fila_actual
+    for idx_r, r_data in enumerate(registros):
+        ws.row_dimensions[fila_actual].height = 20
+        valores_fila = [
             str(r_data.get("fecha", "")),
             sanitizar_celda_excel(r_data.get("turno", "Único")),
+            sanitizar_celda_excel(r_data.get("cajero", "Celia")),
             float(to_dec(r_data.get("efectivo"))),
             float(to_dec(r_data.get("mp_neto"))),
             float(to_dec(r_data.get("mp_iva"))),
@@ -714,356 +808,266 @@ def _guardar_historico_local_desde_registros(registros: list[dict[str, Any]]):
             float(to_dec(r_data.get("diferencia_caja"))),
             sanitizar_celda_excel(r_data.get("detalle_obs", "")),
         ]
-        ws.append(fila)
-        r = ws.max_row
         fill_zebra = PatternFill(start_color=COLOR_ZEBRA, end_color=COLOR_ZEBRA, fill_type="solid")
-        for col in range(1, len(COLUMNAS_HISTORICO) + 1):
-            cell = ws.cell(row=r, column=col)
-            cell.border = BORDE_SUAVE
-            if idx_f % 2 == 1:
-                cell.fill = fill_zebra
-            if col in (1, 2):
-                cell.alignment = Alignment(horizontal="center")
-            elif 3 <= col <= 11:
-                cell.number_format = FORMATO_MONEDA_ARS
-                if col in (3, 5, 7, 9, 10, 11):
-                    cell.font = Font(bold=True)
+        for col_i, val in enumerate(valores_fila, start=1):
+            celda = ws.cell(row=fila_actual, column=col_i, value=val)
+            celda.border = BORDE_SUAVE
+            celda.font = Font(size=10, bold=(col_i in (4, 6, 8, 10, 11, 12)))
+            if idx_r % 2 == 1:
+                celda.fill = fill_zebra
+            if col_i in (1, 2, 3):
+                celda.alignment = Alignment(horizontal="center", vertical="center")
+            elif 4 <= col_i <= 12:
+                celda.number_format = FORMATO_MONEDA_ARS
+                celda.alignment = Alignment(horizontal="right", vertical="center")
             else:
-                cell.alignment = Alignment(wrap_text=True)
+                celda.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        fila_actual += 1
 
-    if registros:
-        fila_inicio = 4
-        fila_fin = ws.max_row
-        fila_tot = fila_fin + 1
-        ws.row_dimensions[fila_tot].height = 24
-        c_lbl = ws.cell(row=fila_tot, column=1, value="TOTAL MES")
-        c_lbl.font = Font(bold=True, size=11, color=COLOR_PRIMARIO)
-        c_lbl.fill = PatternFill(start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid")
-        c_lbl.border = BORDE_TOTAL
-        c_lbl.alignment = Alignment(horizontal="center", vertical="center")
+    if not registros:
+        ws.row_dimensions[fila_actual].height = 20
+        ws.merge_cells(start_row=fila_actual, start_column=1, end_row=fila_actual, end_column=num_cols_cierres)
+        c_vacio = ws.cell(row=fila_actual, column=1, value="Sin cierres registrados para este período.")
+        c_vacio.font = Font(italic=True, color="555555")
+        c_vacio.alignment = Alignment(horizontal="center", vertical="center")
+        fila_actual += 1
 
-        for col_idx in range(3, 12):
-            letra = get_column_letter(col_idx)
-            c_tot = ws.cell(row=fila_tot, column=col_idx, value=f"=SUM({letra}{fila_inicio}:{letra}{fila_fin})")
-            c_tot.font = Font(bold=True, size=11, color=COLOR_PRIMARIO)
-            c_tot.number_format = FORMATO_MONEDA_ARS
-            c_tot.border = BORDE_TOTAL
-            c_tot.fill = PatternFill(start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid")
+    fila_fin_cierres = max(fila_inicio_cierres, fila_actual - 1)
+    fila_total_cierres = fila_actual
+    ws.row_dimensions[fila_total_cierres].height = 23
 
-    _ajustar_columnas(ws)
-    _configurar_impresion(ws, landscape=True)
+    c_tot_lbl = ws.cell(row=fila_total_cierres, column=1, value="TOTAL")
+    c_tot_lbl.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
+    c_tot_lbl.alignment = Alignment(horizontal="center", vertical="center")
+    ws.cell(row=fila_total_cierres, column=2, value=f"{len(registros)} cierre(s)").alignment = Alignment(
+        horizontal="center", vertical="center"
+    )
+    ws.cell(row=fila_total_cierres, column=3, value="")
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    with bloqueo_archivo():
-        guardar_bytes_atomico(ARCHIVO_MAESTRO_LOCAL, buf.getvalue())
-
-
-def generar_excel_unico_bytes(
-    registros: list[dict[str, Any]],
-    eventos_auditoria: list[dict[str, Any]],
-    etiqueta_rango: str,
-) -> bytes:
-    wb = Workbook()
-    ws_res = wb.active
-    ws_res.title = "Resumen_Mensual"
-
-    ws_cierres = wb.create_sheet("Cierres")
-    ws_ing = wb.create_sheet("Detalle_Ingresos")
-    ws_egr = wb.create_sheet("Detalle_Egresos")
-    ws_arq = wb.create_sheet("Arqueo")
-    ws_aud = wb.create_sheet("Auditoria")
-
-    # --- HOJA 2: CIERRES ---
-    ws_cierres["A1"] = sanitizar_celda_excel(f"ÓPTICA KLIMT — CIERRES CONFIRMADOS ({etiqueta_rango})")
-    ws_cierres["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
-    headers_cierres = [
-        "Fecha",
-        "Turno",
-        "Cajero",
-        "Supervisor",
-        "Efectivo",
-        "MP Neto",
-        "MP IVA (21%)",
-        "BBVA Neto",
-        "BBVA IVA (21%)",
-        "Provincia",
-        "Gastos",
-        "Celia / Toti",
-        "Esperado Total",
-        "Cuaderno Total",
-        "Diferencia Caja",
-        "Observaciones",
-    ]
-    ws_cierres.append([])
-    ws_cierres.append(headers_cierres)
-    _estilizar_encabezado(ws_cierres, 3, len(headers_cierres))
-    ws_cierres.freeze_panes = "A4"
-
-    for idx, r_data in enumerate(registros):
-        cierre, arqueo_c, sup_c, _ = _registro_db_a_cierre(r_data)
-        d = procesar_datos_dia(cierre, arqueo_conteo=arqueo_c)
-        row_num = 4 + idx
-        vals = [
-            str(r_data.get("fecha", "")),
-            sanitizar_celda_excel(r_data.get("turno", "Único")),
-            sanitizar_celda_excel(r_data.get("cajero", "Celia")),
-            sanitizar_celda_excel(r_data.get("supervisor") or sup_c),
-            float(d["efectivo"]),
-            float(d["mp_neto"]),
-            float(d["mp_iva"]),
-            float(d["bbva_neto"]),
-            float(d["bbva_iva"]),
-            float(d["provincia"]),
-            float(d["gastos"]),
-            float(d["celia_toti"]),
-            float(d["total_general_esperado"]),
-            float(d["caja_cuaderno"]),
-            float(d["diferencia_cuaderno"]),
-            sanitizar_celda_excel(d["detalle_obs"]),
-        ]
-        ws_cierres.append(vals)
-        for col_i in range(1, len(headers_cierres) + 1):
-            cell = ws_cierres.cell(row=row_num, column=col_i)
-            cell.border = BORDE_SUAVE
-            if idx % 2 == 1:
-                cell.fill = PatternFill(start_color=COLOR_ZEBRA, end_color=COLOR_ZEBRA, fill_type="solid")
-            if 5 <= col_i <= 15:
-                cell.number_format = FORMATO_MONEDA_ARS
-
-    r_fin_cierres = 3 + max(len(registros), 1)
-    r_tot_cierres = r_fin_cierres + 1
-    ws_cierres.cell(row=r_tot_cierres, column=1, value="TOTAL").font = Font(bold=True, color=COLOR_PRIMARIO)
-    for col_i in range(5, 16):
+    for col_i in range(4, 13):
         letra = get_column_letter(col_i)
-        c_t = ws_cierres.cell(row=r_tot_cierres, column=col_i, value=f"=SUM({letra}4:{letra}{r_fin_cierres})")
-        c_t.font = Font(bold=True, color=COLOR_PRIMARIO)
-        c_t.number_format = FORMATO_MONEDA_ARS
-    for col_i in range(1, len(headers_cierres) + 1):
-        ws_cierres.cell(row=r_tot_cierres, column=col_i).border = BORDE_TOTAL
-        ws_cierres.cell(row=r_tot_cierres, column=col_i).fill = PatternFill(
-            start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid"
+        c_sum = ws.cell(
+            row=fila_total_cierres,
+            column=col_i,
+            value=f"=SUM({letra}{fila_inicio_cierres}:{letra}{fila_fin_cierres})",
         )
-    ws_cierres.auto_filter.ref = f"A3:{get_column_letter(len(headers_cierres))}{r_fin_cierres}"
-    _ajustar_columnas(ws_cierres)
-    _configurar_impresion(ws_cierres, landscape=True)
+        c_sum.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
+        c_sum.number_format = FORMATO_MONEDA_ARS
+        c_sum.alignment = Alignment(horizontal="right", vertical="center")
 
-    # --- HOJA 3: DETALLE_INGRESOS ---
-    ws_ing["A1"] = sanitizar_celda_excel(f"ÓPTICA KLIMT — DETALLE DE INGRESOS ({etiqueta_rango})")
-    ws_ing["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
-    headers_ing = ["Fecha", "Turno", "Detalle / Producto", "Medio de Pago", "Confianza", "Bruto", "Neto", "IVA (21%)"]
-    ws_ing.append([])
-    ws_ing.append(headers_ing)
-    _estilizar_encabezado(ws_ing, 3, len(headers_ing))
-    ws_ing.freeze_panes = "A4"
+    ws.cell(row=fila_total_cierres, column=13, value="")
+    for col_i in range(1, num_cols_cierres + 1):
+        cel = ws.cell(row=fila_total_cierres, column=col_i)
+        cel.border = BORDE_TOTAL
+        cel.fill = PatternFill(start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid")
 
-    ing_row_idx = 4
-    for r_data in registros:
-        cierre, _, _, _ = _registro_db_a_cierre(r_data)
-        f_str = str(r_data.get("fecha", ""))
-        t_str = normalizar_turno(r_data.get("turno"))
-        for op in cierre.operaciones:
-            aplica_iva = op.medio_pago in ("qr_mp", "payway_bbva", "transferencia")
-            ws_ing.cell(row=ing_row_idx, column=1, value=f_str).alignment = Alignment(horizontal="center")
-            ws_ing.cell(row=ing_row_idx, column=2, value=sanitizar_celda_excel(t_str)).alignment = Alignment(horizontal="center")
-            ws_ing.cell(row=ing_row_idx, column=3, value=sanitizar_celda_excel(op.detalle))
-            ws_ing.cell(row=ing_row_idx, column=4, value=sanitizar_celda_excel(ETIQUETAS_MEDIO_PAGO.get(op.medio_pago, op.medio_pago)))
-            ws_ing.cell(row=ing_row_idx, column=5, value=op.confianza.upper()).alignment = Alignment(horizontal="center")
-            ws_ing.cell(row=ing_row_idx, column=6, value=float(to_dec(op.monto))).number_format = FORMATO_MONEDA_ARS
-            if aplica_iva:
-                ws_ing.cell(row=ing_row_idx, column=7, value=f"=ROUND(F{ing_row_idx}/1.21,2)").number_format = FORMATO_MONEDA_ARS
-                ws_ing.cell(row=ing_row_idx, column=8, value=f"=ROUND(F{ing_row_idx}-G{ing_row_idx},2)").number_format = FORMATO_MONEDA_ARS
-            else:
-                ws_ing.cell(row=ing_row_idx, column=7, value=f"=F{ing_row_idx}").number_format = FORMATO_MONEDA_ARS
-                ws_ing.cell(row=ing_row_idx, column=8, value=0.0).number_format = FORMATO_MONEDA_ARS
-            for col_i in range(1, 9):
-                ws_ing.cell(row=ing_row_idx, column=col_i).border = BORDE_SUAVE
-            ing_row_idx += 1
+    fila_actual += 2
 
-    r_fin_ing = max(ing_row_idx - 1, 4)
-    r_tot_ing = r_fin_ing + 1
-    ws_ing.cell(row=r_tot_ing, column=3, value="TOTAL INGRESOS").font = Font(bold=True, color=COLOR_PRIMARIO)
-    for col_i in (6, 7, 8):
-        letra = get_column_letter(col_i)
-        c_t = ws_ing.cell(row=r_tot_ing, column=col_i, value=f"=SUM({letra}4:{letra}{r_fin_ing})")
-        c_t.font = Font(bold=True, color=COLOR_PRIMARIO)
-        c_t.number_format = FORMATO_MONEDA_ARS
-    for col_i in range(1, 9):
-        ws_ing.cell(row=r_tot_ing, column=col_i).border = BORDE_TOTAL
-        ws_ing.cell(row=r_tot_ing, column=col_i).fill = PatternFill(
-            start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid"
-        )
-    _ajustar_columnas(ws_ing)
-    _configurar_impresion(ws_ing, landscape=True)
+    # --- CUADRO 2: RESUMEN DE RUBROS E IMPUESTOS ---
+    _estilizar_banner_seccion(
+        ws,
+        fila_actual,
+        5,
+        "2. RESUMEN DE RUBROS, IVA (21%) Y RETIROS",
+        COLOR_INGRESOS_HDR,
+    )
+    fila_actual += 1
 
-    # --- HOJA 4: DETALLE_EGRESOS ---
-    ws_egr["A1"] = sanitizar_celda_excel(f"ÓPTICA KLIMT — DETALLE DE EGRESOS Y RETIROS ({etiqueta_rango})")
-    ws_egr["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
-    headers_egr = ["Fecha", "Turno", "Tipo", "Concepto", "Monto (ARS)"]
-    ws_egr.append([])
-    ws_egr.append(headers_egr)
-    _estilizar_encabezado(ws_egr, 3, len(headers_egr))
-    ws_egr.freeze_panes = "A4"
+    headers_res = ["Rubro / Concepto", "Importe (ARS)", "Referencia", "", ""]
+    ws.cell(row=fila_actual, column=1, value=headers_res[0])
+    ws.cell(row=fila_actual, column=2, value=headers_res[1])
+    ws.cell(row=fila_actual, column=3, value=headers_res[2])
+    _estilizar_encabezado(ws, fila_actual, 3, COLOR_INGRESOS_HDR)
+    fila_actual += 1
 
-    egr_row_idx = 4
-    for r_data in registros:
-        cierre, _, _, _ = _registro_db_a_cierre(r_data)
-        f_str = str(r_data.get("fecha", ""))
-        t_str = normalizar_turno(r_data.get("turno"))
-        for g in cierre.gastos_retiros:
-            ws_egr.cell(row=egr_row_idx, column=1, value=f_str).alignment = Alignment(horizontal="center")
-            ws_egr.cell(row=egr_row_idx, column=2, value=sanitizar_celda_excel(t_str)).alignment = Alignment(horizontal="center")
-            ws_egr.cell(row=egr_row_idx, column=3, value=g.tipo.upper()).alignment = Alignment(horizontal="center")
-            ws_egr.cell(row=egr_row_idx, column=4, value=sanitizar_celda_excel(g.concepto))
-            ws_egr.cell(row=egr_row_idx, column=5, value=float(to_dec(g.monto))).number_format = FORMATO_MONEDA_ARS
-            for col_i in range(1, 6):
-                ws_egr.cell(row=egr_row_idx, column=col_i).border = BORDE_SUAVE
-            egr_row_idx += 1
-
-    r_fin_egr = max(egr_row_idx - 1, 4)
-    r_tot_egr = r_fin_egr + 1
-    ws_egr.cell(row=r_tot_egr, column=4, value="TOTAL EGRESOS").font = Font(bold=True, color=COLOR_PRIMARIO)
-    c_te = ws_egr.cell(row=r_tot_egr, column=5, value=f"=SUM(E4:E{r_fin_egr})")
-    c_te.font = Font(bold=True, color=COLOR_PRIMARIO)
-    c_te.number_format = FORMATO_MONEDA_ARS
-    for col_i in range(1, 6):
-        ws_egr.cell(row=r_tot_egr, column=col_i).border = BORDE_TOTAL
-        ws_egr.cell(row=r_tot_egr, column=col_i).fill = PatternFill(
-            start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid"
-        )
-    _ajustar_columnas(ws_egr)
-    _configurar_impresion(ws_egr, landscape=False)
-
-    # --- HOJA 5: ARQUEO ---
-    ws_arq["A1"] = sanitizar_celda_excel(f"ÓPTICA KLIMT — ARQUEO DE BILLETES POR CIERRE ({etiqueta_rango})")
-    ws_arq["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
-    headers_arq = ["Fecha", "Turno", "Denominación", "Cantidad", "Subtotal"]
-    ws_arq.append([])
-    ws_arq.append(headers_arq)
-    _estilizar_encabezado(ws_arq, 3, len(headers_arq))
-    ws_arq.freeze_panes = "A4"
-
-    arq_row_idx = 4
-    for r_data in registros:
-        _, arqueo_c, _, _ = _registro_db_a_cierre(r_data)
-        f_str = str(r_data.get("fecha", ""))
-        t_str = normalizar_turno(r_data.get("turno"))
-        for denom in DENOMINACIONES_ARS:
-            cant = max(0, int(arqueo_c.get(denom, 0)))
-            if cant == 0 and len(registros) > 0:
-                continue
-            ws_arq.cell(row=arq_row_idx, column=1, value=f_str).alignment = Alignment(horizontal="center")
-            ws_arq.cell(row=arq_row_idx, column=2, value=sanitizar_celda_excel(t_str)).alignment = Alignment(horizontal="center")
-            ws_arq.cell(row=arq_row_idx, column=3, value=denom).number_format = FORMATO_MONEDA_ARS
-            ws_arq.cell(row=arq_row_idx, column=4, value=cant).alignment = Alignment(horizontal="center")
-            ws_arq.cell(row=arq_row_idx, column=5, value=f"=C{arq_row_idx}*D{arq_row_idx}").number_format = FORMATO_MONEDA_ARS
-            for col_i in range(1, 6):
-                ws_arq.cell(row=arq_row_idx, column=col_i).border = BORDE_SUAVE
-            arq_row_idx += 1
-
-    r_fin_arq = max(arq_row_idx - 1, 4)
-    r_tot_arq = r_fin_arq + 1
-    ws_arq.cell(row=r_tot_arq, column=3, value="TOTAL ARQUEO").font = Font(bold=True, color=COLOR_PRIMARIO)
-    ws_arq.cell(row=r_tot_arq, column=4, value=f"=SUM(D4:D{r_fin_arq})").font = Font(bold=True, color=COLOR_PRIMARIO)
-    c_tarq = ws_arq.cell(row=r_tot_arq, column=5, value=f"=SUM(E4:E{r_fin_arq})")
-    c_tarq.font = Font(bold=True, color=COLOR_PRIMARIO)
-    c_tarq.number_format = FORMATO_MONEDA_ARS
-    for col_i in range(1, 6):
-        ws_arq.cell(row=r_tot_arq, column=col_i).border = BORDE_TOTAL
-        ws_arq.cell(row=r_tot_arq, column=col_i).fill = PatternFill(
-            start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid"
-        )
-    _ajustar_columnas(ws_arq)
-    _configurar_impresion(ws_arq, landscape=False)
-
-    # --- HOJA 6: AUDITORIA ---
-    ws_aud["A1"] = sanitizar_celda_excel(f"ÓPTICA KLIMT — BITÁCORA DE AUDITORÍA ({etiqueta_rango})")
-    ws_aud["A1"].font = Font(bold=True, size=13, color=COLOR_PRIMARIO)
-    headers_aud = ["Fecha/Hora (ART)", "Usuario", "Acción", "Fecha Cierre", "Turno", "Detalle"]
-    ws_aud.append([])
-    ws_aud.append(headers_aud)
-    _estilizar_encabezado(ws_aud, 3, len(headers_aud))
-    ws_aud.freeze_panes = "A4"
-
-    for idx_a, ev in enumerate(eventos_auditoria):
-        r_a = 4 + idx_a
-        ws_aud.cell(row=r_a, column=1, value=sanitizar_celda_excel(ev.get("creado_en", "")))
-        ws_aud.cell(row=r_a, column=2, value=sanitizar_celda_excel(ev.get("usuario", "")))
-        ws_aud.cell(row=r_a, column=3, value=sanitizar_celda_excel(ev.get("accion", "")))
-        ws_aud.cell(row=r_a, column=4, value=sanitizar_celda_excel(ev.get("fecha_cierre", "")))
-        ws_aud.cell(row=r_a, column=5, value=sanitizar_celda_excel(ev.get("turno", "")))
-        ws_aud.cell(row=r_a, column=6, value=sanitizar_celda_excel(ev.get("detalle", ""))).alignment = Alignment(wrap_text=True)
-        for col_i in range(1, 7):
-            ws_aud.cell(row=r_a, column=col_i).border = BORDE_SUAVE
-    _ajustar_columnas(ws_aud, min_width=16, max_width=70)
-    _configurar_impresion(ws_aud, landscape=True)
-
-    # --- HOJA 1: RESUMEN_MENSUAL ---
-    ws_res["A1"] = sanitizar_celda_excel(f"ÓPTICA KLIMT — RESUMEN CONSOLIDADO ({etiqueta_rango})")
-    ws_res["A1"].font = Font(bold=True, size=15, color=COLOR_PRIMARIO)
-    ws_res.row_dimensions[1].height = 28
-
-    ws_res.cell(row=3, column=1, value="CONCEPTO").font = Font(bold=True, color="FFFFFF")
-    ws_res.cell(row=3, column=2, value="IMPORTE (ARS)").font = Font(bold=True, color="FFFFFF")
-    _estilizar_encabezado(ws_res, 3, 2)
-
-    resumen_filas = [
-        ("Efectivo", f"=Cierres!E{r_tot_cierres}"),
-        ("Mercado Pago Neto", f"=Cierres!F{r_tot_cierres}"),
-        ("Mercado Pago IVA (21%)", f"=Cierres!G{r_tot_cierres}"),
-        ("Payway BBVA Neto", f"=Cierres!H{r_tot_cierres}"),
-        ("Payway BBVA IVA (21%)", f"=Cierres!I{r_tot_cierres}"),
-        ("Posnet Provincia", f"=Cierres!J{r_tot_cierres}"),
-        ("Total IVA (21%)", f"=B6+B8"),
-        ("Gastos", f"=Cierres!K{r_tot_cierres}"),
-        ("Retiros (Celia / Toti)", f"=Cierres!L{r_tot_cierres}"),
-        ("Diferencia Caja (Cuaderno vs Esperado)", f"=Cierres!O{r_tot_cierres}"),
+    r_tot = fila_total_cierres
+    resumen_items = [
+        ("Efectivo", f"=D{r_tot}", "Caja / ventas en efectivo", False),
+        ("Mercado Pago Neto", f"=E{r_tot}", "Bruto / 1.21", False),
+        ("Mercado Pago IVA (21%)", f"=F{r_tot}", "Débito fiscal MP", True),
+        ("Payway BBVA Neto", f"=G{r_tot}", "Bruto / 1.21", False),
+        ("Payway BBVA IVA (21%)", f"=H{r_tot}", "Débito fiscal BBVA", True),
+        ("Posnet Provincia", f"=I{r_tot}", "Cobros Posnet Provincia", False),
+        ("Total IVA (21%)", f"=B{fila_actual + 2}+B{fila_actual + 4}", "MP IVA + BBVA IVA", True),
+        ("Gastos", f"=J{r_tot}", "Gastos operativos", False),
+        ("Retiros (Celia / Toti)", f"=K{r_tot}", "Retiros de caja", True),
+        ("Diferencia Caja", f"=L{r_tot}", "Cuaderno vs. esperado", True),
     ]
 
-    for idx_r, (concepto, formula_str) in enumerate(resumen_filas):
-        r = 4 + idx_r
-        c1 = ws_res.cell(row=r, column=1, value=concepto)
-        c2 = ws_res.cell(row=r, column=2, value=formula_str)
+    fila_res_inicio = fila_actual
+    for idx_res, (concepto, formula_val, ref_txt, es_destacado) in enumerate(resumen_items):
+        ws.row_dimensions[fila_actual].height = 20
+        c1 = ws.cell(row=fila_actual, column=1, value=concepto)
+        c2 = ws.cell(row=fila_actual, column=2, value=formula_val)
+        c3 = ws.cell(row=fila_actual, column=3, value=ref_txt)
+
         c1.border = BORDE_SUAVE
         c2.border = BORDE_SUAVE
+        c3.border = BORDE_SUAVE
+
         c2.number_format = FORMATO_MONEDA_ARS
-        if concepto in ("Total IVA (21%)", "Diferencia Caja (Cuaderno vs Esperado)"):
-            c1.font = Font(bold=True, color=COLOR_PRIMARIO)
-            c2.font = Font(bold=True, color=COLOR_PRIMARIO)
+        c2.alignment = Alignment(horizontal="right", vertical="center")
+        c3.alignment = Alignment(horizontal="left", vertical="center")
 
-    ws_res.cell(row=16, column=1, value="RUBRO PARA GRÁFICO").font = Font(bold=True, color="FFFFFF")
-    ws_res.cell(row=16, column=2, value="MONTO BRUTO (ARS)").font = Font(bold=True, color="FFFFFF")
-    _estilizar_encabezado(ws_res, 16, 2)
+        if es_destacado:
+            c1.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
+            c2.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
+            c1.fill = PatternFill(start_color="EDF2F8", end_color="EDF2F8", fill_type="solid")
+            c2.fill = PatternFill(start_color="EDF2F8", end_color="EDF2F8", fill_type="solid")
+            c3.fill = PatternFill(start_color="EDF2F8", end_color="EDF2F8", fill_type="solid")
+        else:
+            c1.font = Font(size=10)
+            c2.font = Font(size=10)
+            c3.font = Font(size=9, color="555555")
 
-    grafico_filas = [
-        ("Efectivo", "=B4"),
-        ("Mercado Pago", "=B5+B6"),
-        ("Payway BBVA", "=B7+B8"),
-        ("Provincia", "=B9"),
-        ("Gastos + Retiros", "=B11+B12"),
-    ]
-    for idx_g, (rubro, f_rubro) in enumerate(grafico_filas):
-        rg = 17 + idx_g
-        ws_res.cell(row=rg, column=1, value=rubro).border = BORDE_SUAVE
-        cg = ws_res.cell(row=rg, column=2, value=f_rubro)
-        cg.border = BORDE_SUAVE
-        cg.number_format = FORMATO_MONEDA_ARS
+        fila_actual += 1
 
-    chart = BarChart()
-    chart.title = "Totales por Rubro"
-    chart.y_axis.title = "ARS"
-    chart.x_axis.title = "Rubro"
-    data_ref = Reference(ws_res, min_col=2, min_row=16, max_row=21)
-    cats_ref = Reference(ws_res, min_col=1, min_row=17, max_row=21)
-    chart.add_data(data_ref, titles_from_data=True)
-    chart.set_categories(cats_ref)
-    chart.legend = None
-    chart.width = 16
-    chart.height = 9
-    ws_res.add_chart(chart, "D4")
+    # Fila total de ventas brutas (Efectivo + MP Neto + MP IVA + BBVA Neto + BBVA IVA + Provincia)
+    ws.row_dimensions[fila_actual].height = 22
+    r_ef = fila_res_inicio
+    r_mp_n = fila_res_inicio + 1
+    r_mp_i = fila_res_inicio + 2
+    r_bb_n = fila_res_inicio + 3
+    r_bb_i = fila_res_inicio + 4
+    r_pr = fila_res_inicio + 5
 
-    _ajustar_columnas(ws_res, min_width=22, max_width=45)
-    _configurar_impresion(ws_res, landscape=True)
+    c_v_lbl = ws.cell(row=fila_actual, column=1, value="TOTAL VENTAS DEL PERÍODO")
+    c_v_val = ws.cell(row=fila_actual, column=2, value=f"=B{r_ef}+B{r_mp_n}+B{r_mp_i}+B{r_bb_n}+B{r_bb_i}+B{r_pr}")
+    c_v_ref = ws.cell(row=fila_actual, column=3, value="Efectivo + MP + BBVA + Provincia")
+    for c_item in (c_v_lbl, c_v_val, c_v_ref):
+        c_item.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
+        c_item.border = BORDE_TOTAL
+        c_item.fill = PatternFill(start_color=COLOR_SECUNDARIO, end_color=COLOR_SECUNDARIO, fill_type="solid")
+    c_v_val.number_format = FORMATO_MONEDA_ARS
+    c_v_val.alignment = Alignment(horizontal="right", vertical="center")
+    fila_actual += 2
+
+    # --- CUADRO 3: DETALLE DE OPERACIONES Y GASTOS / RETIROS ---
+    movimientos_filas: list[tuple[str, str, str, str, float]] = []
+    for r_data in registros:
+        cierre_obj, _, _, _ = _registro_db_a_cierre(r_data)
+        f_txt = str(r_data.get("fecha", ""))
+        t_txt = normalizar_turno(r_data.get("turno"))
+        for op in cierre_obj.operaciones:
+            movimientos_filas.append(
+                (
+                    f_txt,
+                    t_txt,
+                    "INGRESO",
+                    f"{ETIQUETAS_MEDIO_PAGO.get(op.medio_pago, op.medio_pago)} — {op.detalle}",
+                    float(to_dec(op.monto)),
+                )
+            )
+        for g in cierre_obj.gastos_retiros:
+            tipo_lbl = "RETIRO" if g.tipo == "retiro" else "GASTO"
+            movimientos_filas.append(
+                (
+                    f_txt,
+                    t_txt,
+                    tipo_lbl,
+                    g.concepto,
+                    float(to_dec(g.monto)),
+                )
+            )
+
+    if movimientos_filas:
+        _estilizar_banner_seccion(
+            ws,
+            fila_actual,
+            5,
+            "3. DETALLE DE OPERACIONES, GASTOS Y RETIROS",
+            COLOR_EGRESOS_HDR,
+        )
+        fila_actual += 1
+
+        headers_mov = ["Fecha", "Turno", "Tipo", "Detalle / Concepto", "Monto (ARS)"]
+        for idx_m, m_txt in enumerate(headers_mov, start=1):
+            ws.cell(row=fila_actual, column=idx_m, value=m_txt)
+        _estilizar_encabezado(ws, fila_actual, 5, COLOR_EGRESOS_HDR)
+        fila_actual += 1
+
+        fila_mov_inicio = fila_actual
+        for idx_mf, (f_m, t_m, tipo_m, det_m, monto_m) in enumerate(movimientos_filas):
+            ws.row_dimensions[fila_actual].height = 19
+            fill_m = PatternFill(start_color="FDF8F5", end_color="FDF8F5", fill_type="solid") if idx_mf % 2 == 1 else None
+            c_fm = ws.cell(row=fila_actual, column=1, value=f_m)
+            c_tm = ws.cell(row=fila_actual, column=2, value=sanitizar_celda_excel(t_m))
+            c_pm = ws.cell(row=fila_actual, column=3, value=tipo_m)
+            c_dm = ws.cell(row=fila_actual, column=4, value=sanitizar_celda_excel(det_m))
+            c_vm = ws.cell(row=fila_actual, column=5, value=monto_m)
+
+            c_fm.alignment = Alignment(horizontal="center", vertical="center")
+            c_tm.alignment = Alignment(horizontal="center", vertical="center")
+            c_pm.alignment = Alignment(horizontal="center", vertical="center")
+            c_pm.font = Font(bold=True, size=9, color=COLOR_EGRESOS_HDR if tipo_m != "INGRESO" else COLOR_INGRESOS_HDR)
+            c_dm.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            c_vm.number_format = FORMATO_MONEDA_ARS
+            c_vm.alignment = Alignment(horizontal="right", vertical="center")
+
+            for c_item in (c_fm, c_tm, c_pm, c_dm, c_vm):
+                c_item.border = BORDE_SUAVE
+                if fill_m:
+                    c_item.fill = fill_m
+            fila_actual += 1
+
+        fila_mov_fin = fila_actual - 1
+        ws.row_dimensions[fila_actual].height = 22
+        c_m_tot_lbl = ws.cell(row=fila_actual, column=1, value="TOTAL DETALLE")
+        c_m_tot_lbl.font = Font(bold=True, size=10, color=COLOR_EGRESOS_HDR)
+        c_m_tot_lbl.alignment = Alignment(horizontal="center", vertical="center")
+        c_m_tot_val = ws.cell(row=fila_actual, column=5, value=f"=SUM(E{fila_mov_inicio}:E{fila_mov_fin})")
+        c_m_tot_val.font = Font(bold=True, size=10, color=COLOR_EGRESOS_HDR)
+        c_m_tot_val.number_format = FORMATO_MONEDA_ARS
+        c_m_tot_val.alignment = Alignment(horizontal="right", vertical="center")
+        for col_i in range(1, 6):
+            cel = ws.cell(row=fila_actual, column=col_i)
+            cel.border = BORDE_TOTAL
+            cel.fill = PatternFill(start_color="F8E8DC", end_color="F8E8DC", fill_type="solid")
+        fila_actual += 2
+
+    # --- CUADRO 4: BITÁCORA DE AUDITORÍA ---
+    if eventos_auditoria:
+        _estilizar_banner_seccion(
+            ws,
+            fila_actual,
+            6,
+            "4. REGISTRO DE AUDITORÍA Y CAMBIOS",
+            COLOR_AUD_HDR,
+        )
+        fila_actual += 1
+
+        headers_aud = ["Fecha / Hora", "Usuario", "Acción", "Fecha Cierre", "Turno", "Detalle"]
+        for idx_a, a_txt in enumerate(headers_aud, start=1):
+            ws.cell(row=fila_actual, column=idx_a, value=a_txt)
+        _estilizar_encabezado(ws, fila_actual, 6, COLOR_AUD_HDR)
+        fila_actual += 1
+
+        for idx_ev, ev in enumerate(eventos_auditoria[:50]):
+            ws.row_dimensions[fila_actual].height = 19
+            fill_a = PatternFill(start_color="F5F5F5", end_color="F5F5F5", fill_type="solid") if idx_ev % 2 == 1 else None
+            vals_a = [
+                sanitizar_celda_excel(str(ev.get("creado_en", ""))[:19].replace("T", " ")),
+                sanitizar_celda_excel(ev.get("usuario", "")),
+                sanitizar_celda_excel(ev.get("accion", "")),
+                sanitizar_celda_excel(ev.get("fecha_cierre", "")),
+                sanitizar_celda_excel(ev.get("turno", "")),
+                sanitizar_celda_excel(ev.get("detalle", "")),
+            ]
+            for col_i, v_a in enumerate(vals_a, start=1):
+                c_a = ws.cell(row=fila_actual, column=col_i, value=v_a)
+                c_a.border = BORDE_SUAVE
+                c_a.font = Font(size=9)
+                c_a.alignment = Alignment(
+                    horizontal="center" if col_i in (1, 2, 3, 4, 5) else "left",
+                    vertical="center",
+                    wrap_text=(col_i == 6),
+                )
+                if fill_a:
+                    c_a.fill = fill_a
+            fila_actual += 1
+
+    _ajustar_columnas_hoja_unica(ws)
+    _configurar_impresion_hoja_unica(ws)
 
     out = io.BytesIO()
     wb.save(out)
@@ -1242,7 +1246,7 @@ with st.sidebar:
 # --- VISTA 1: TABLERO DE COMANDO ---
 if menu_opcion == "Tablero de Comando (Resumen)":
     st.title("Óptica Klimt — Tablero de Comando Gerencial")
-    st.write("Vista ejecutiva del consolidado, discriminación de IVA (21%) y exportación del Excel único.")
+    st.write("Vista ejecutiva del consolidado, discriminación de IVA (21%) y exportación del Excel en una sola hoja.")
 
     try:
         todos_cierres = obtener_todos_los_cierres()
@@ -1253,7 +1257,7 @@ if menu_opcion == "Tablero de Comando (Resumen)":
     fechas_disponibles = sorted({str(r.get("fecha", "")) for r in todos_cierres if r.get("fecha")})
     meses_disponibles = sorted({f[:7] for f in fechas_disponibles if len(f) >= 7}, reverse=True)
 
-    st.subheader("Filtro de Período para Tablero y Excel Único")
+    st.subheader("Filtro de Período para Tablero y Excel")
     modo_filtro = st.radio(
         "Seleccionar período:",
         ["Todo el histórico", "Por mes", "Rango de fechas"],
@@ -1364,12 +1368,12 @@ if menu_opcion == "Tablero de Comando (Resumen)":
         eventos_auditoria=eventos_aud,
         etiqueta_rango=etiqueta_rango,
     )
-    nombre_unico = f"Optica_Klimt_Consolidado_{sanitizar_nombre_archivo(etiqueta_rango)}.xlsx"
+    nombre_unico = f"Optica_Klimt_Cierres_{sanitizar_nombre_archivo(etiqueta_rango)}.xlsx"
 
     col_ex1, col_ex2, col_ex3 = st.columns(3)
     with col_ex1:
         st.download_button(
-            label="Descargar Excel único (.xlsx)",
+            label="Descargar Excel (.xlsx)",
             data=excel_unico_bytes,
             file_name=nombre_unico,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1536,7 +1540,7 @@ elif menu_opcion == "Procesar Cierre Diario":
                 f"Optica_Klimt_Cierres_{fecha_iso_actual}_{sanitizar_nombre_archivo(res.turno)}.xlsx"
             )
             st.download_button(
-                label="Descargar Excel único (.xlsx)",
+                label="Descargar Excel (.xlsx)",
                 data=excel_consolidado_actual,
                 file_name=nombre_unico_cierre,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
