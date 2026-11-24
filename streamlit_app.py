@@ -1374,4 +1374,171 @@ if menu_opcion == "Tablero de Comando (Resumen)":
             file_name=nombre_unico,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
-            use_container
+            use_container_width=True,
+        )
+    with col_ex2:
+        backup_bytes = generar_excel_unico_bytes(
+            registros=todos_cierres,
+            eventos_auditoria=eventos_aud,
+            etiqueta_rango="Backup_Completo",
+        )
+        st.download_button(
+            label="Descargar copia de seguridad (.xlsx)",
+            data=backup_bytes,
+            file_name=f"Backup_Optica_Klimt_{ahora_arg().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with col_ex3:
+        with st.expander("Migrar Excel anterior (.xlsx) a la fuente de verdad"):
+            excel_mig = st.file_uploader("Seleccionar cierre_mensual_optica.xlsx", type=["xlsx"], key="mig_xlsx")
+            confirm_mig = st.checkbox("Confirmo importar este archivo a la fuente de verdad", key="confirm_mig")
+            if excel_mig is not None and confirm_mig:
+                try:
+                    cant_ok, advs = migrar_excel_anterior(excel_mig.getvalue(), usuario_actor="Admin")
+                    st.success(f"Migración completada: {cant_ok} cierre(s) importado(s).")
+                    for a in advs:
+                        st.warning(a)
+                    st.rerun()
+                except Exception as err_mig:
+                    st.error(f"Error al migrar archivo: {err_mig}")
+
+# --- VISTA 2: PROCESAR CIERRE DIARIO ---
+elif menu_opcion == "Procesar Cierre Diario":
+    st.title("Óptica Klimt — Procesamiento y Auditoría de Cierre Diario")
+    st.write("Suba la fotografía de la libreta para extraer operaciones, discriminar IVA y guardar en el consolidado.")
+
+    uploaded_file = st.file_uploader("Seleccionar imagen de la planilla (JPG, PNG)", type=["jpg", "jpeg", "png"])
+
+    if uploaded_file is not None:
+        col_img, col_act = st.columns([1, 1.5], gap="large")
+        with col_img:
+            st.image(uploaded_file, caption="Planilla cargada", use_container_width=True)
+        with col_act:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Procesar Cierre con IA", type="primary", use_container_width=True):
+                try:
+                    with st.spinner("Analizando libreta y validando importes..."):
+                        resultado = extraer_cierre_gemini(uploaded_file.getvalue())
+                        st.session_state.resultado = resultado
+                        st.session_state.guardado_maestro = False
+                        st.success("Planilla procesada correctamente.")
+                except Exception as e:
+                    st.error(f"Error al procesar: {e}")
+
+    if "resultado" in st.session_state:
+        res: CierreDia = st.session_state.resultado
+        if res.fecha is None:
+            res.fecha = ahora_arg().date()
+        res.turno = normalizar_turno(res.turno)
+
+        arqueo_dict: dict[int, int] = {denom: 0 for denom in DENOMINACIONES_ARS}
+        sup_in = "Martín"
+        comentario_in = res.observaciones or ""
+
+        with st.expander("Turno, Arqueo de Billetes y Auditoría", expanded=True):
+            col_m1, col_m2, col_m3 = st.columns(3)
+            fecha_in = col_m1.date_input("Fecha contable:", value=res.fecha)
+            turno_in = col_m2.text_input("Turno:", value=res.turno)
+            cajero_in = col_m3.text_input("Cajero:", value=res.cajero or "Celia")
+
+            col_s1, col_s2 = st.columns(2)
+            sup_in = col_s1.text_input("Supervisor:", value=sup_in)
+            comentario_in = col_s2.text_input("Observaciones del cierre:", value=comentario_in)
+
+            res.fecha = fecha_in
+            res.turno = normalizar_turno(turno_in)
+            res.cajero = (cajero_in or "Celia").strip() or "Celia"
+            res.observaciones = comentario_in
+
+            st.markdown("**Conteo de Billetes (ARS):**")
+            cols_billetes = st.columns(5)
+            for idx_b, denom in enumerate(DENOMINACIONES_ARS):
+                with cols_billetes[idx_b % 5]:
+                    arqueo_dict[denom] = st.number_input(
+                        f"$ {denom:,}", min_value=0, step=1, value=0, key=f"bill_{denom}"
+                    )
+
+        d = procesar_datos_dia(res, arqueo_conteo=arqueo_dict)
+
+        st.divider()
+        st.subheader(f"Resumen Auditado — Fecha: {res.fecha.strftime('%d/%m/%Y')} | Turno: {res.turno}")
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Efectivo Ventas", f"$ {d['efectivo']:,.2f}")
+        c2.metric("Mercado Pago", f"$ {d['mp_bruto']:,.2f}", f"IVA: $ {d['mp_iva']:,.2f}")
+        c3.metric("Payway BBVA", f"$ {d['bbva_bruto']:,.2f}", f"IVA: $ {d['bbva_iva']:,.2f}")
+        c4.metric("Provincia", f"$ {d['provincia']:,.2f}")
+        c5.metric("Retiros (Celia/Toti)", f"$ {d['celia_toti']:,.2f}", f"Gastos: $ {d['gastos']:,.2f}")
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Esperado Efectivo Caja", f"$ {d['efectivo_esperado_caja']:,.2f}")
+        k2.metric("Total Billetes Contados", f"$ {d['total_contado_billetes']:,.2f}", f"Dif: $ {d['diferencia_arqueo']:,.2f}")
+        k3.metric("Total General Esperado", f"$ {d['total_general_esperado']:,.2f}")
+        k4.metric(
+            "Diferencia vs. Cuaderno",
+            f"$ {d['diferencia_cuaderno']:,.2f}" if d["tiene_caja_cuaderno"] else "Sin dato en cuaderno",
+        )
+
+        if res.campos_dudosos:
+            st.warning(f"Revisar valores marcados como poco claros: {', '.join(res.campos_dudosos)}")
+
+        fecha_iso_actual = res.fecha.strftime("%Y-%m-%d")
+        existente_colision = buscar_cierre_existente(fecha_iso_actual, res.turno)
+        confirmar_colision = True
+        if existente_colision is not None and not st.session_state.get("guardado_maestro", False):
+            st.warning(
+                f"Ya existe un cierre confirmado para **{fecha_iso_actual}** y turno **{res.turno}** "
+                f"(actualizado: {existente_colision.get('actualizado_en', 's/d')})."
+            )
+            confirmar_colision = st.checkbox(
+                "Confirmo reemplazar el cierre existente para esta fecha y turno (el anterior quedará guardado en Auditoría)",
+                key="confirmar_reemplazo_cierre",
+            )
+
+        st.divider()
+        st.subheader("Confirmación y Exportación")
+
+        todos_act = obtener_todos_los_cierres()
+        aud_act = obtener_auditoria()
+        excel_consolidado_actual = generar_excel_unico_bytes(
+            registros=todos_act,
+            eventos_auditoria=aud_act,
+            etiqueta_rango="Consolidado_Actual",
+        )
+
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            if not st.session_state.get("guardado_maestro", False):
+                if st.button("Confirmar y Guardar en Fuente de Verdad", type="primary", use_container_width=True):
+                    try:
+                        ok, msg = guardar_cierre_persistente(
+                            res=res,
+                            arqueo_conteo=arqueo_dict,
+                            supervisor=sup_in,
+                            comentario_auditor=comentario_in,
+                            usuario_actor="Usuario",
+                            confirmar_reemplazo=confirmar_colision,
+                        )
+                        if ok:
+                            st.session_state.guardado_maestro = True
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    except Exception as e_save:
+                        st.error(f"Error al guardar el cierre: {e_save}")
+            else:
+                st.info("Este cierre ya fue confirmado y guardado en la fuente de verdad.")
+
+        with col_dl2:
+            nombre_unico_cierre = (
+                f"Optica_Klimt_Cierres_{fecha_iso_actual}_{sanitizar_nombre_archivo(res.turno)}.xlsx"
+            )
+            st.download_button(
+                label="Descargar Excel único (.xlsx)",
+                data=excel_consolidado_actual,
+                file_name=nombre_unico_cierre,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
