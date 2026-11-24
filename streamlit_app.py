@@ -1149,7 +1149,7 @@ with st.sidebar:
 
     menu_opcion = st.radio(
         "Navegación",
-        ["Tablero de Comando (Resumen)", "Procesar Cierre Diario"],
+        ["Procesar Cierre Diario", "Tablero de Comando (Resumen)"],
         label_visibility="collapsed",
     )
 
