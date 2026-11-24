@@ -25,138 +25,202 @@ load_dotenv()
 ZONA_ARG = ZoneInfo("America/Argentina/Buenos_Aires")
 
 st.set_page_config(
-    page_title="3CICON — Facturas IVA Compras",
+    page_title="3CICON — Facturas",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# --- ESTILOS MODERNOS Y DE ALTA VISIBILIDAD ---
+# --- ESTILOS DARK MODE EJECUTIVO ---
 st.markdown(
     """
     <style>
-    /* Fondo general suave */
+    /* Fondo general oscuro con degradado sutil */
     .stApp {
-        background-color: #F1F5F9;
-        color: #0F172A;
+        background: radial-gradient(circle at top right, #161E31 0%, #0B0F19 55%, #070A12 100%);
+        color: #F8FAFC;
     }
-    /* Ocultar sidebar para pantalla más limpia */
+    /* Ocultar sidebar y barra superior por defecto */
     [data-testid="stSidebar"], [data-testid="collapsedControl"] {
         display: none;
     }
-    /* Encabezado superior */
-    .top-banner {
-        background: linear-gradient(135deg, #0F766E 0%, #115E59 100%);
-        padding: 1.4rem 1.8rem;
-        border-radius: 14px;
-        color: #FFFFFF;
-        margin-bottom: 1.2rem;
-        box-shadow: 0 4px 14px rgba(15, 118, 110, 0.18);
+    header[data-testid="stHeader"] {
+        background: transparent;
     }
-    .top-banner h1 {
-        margin: 0;
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: #FFFFFF;
-        letter-spacing: -0.3px;
+
+    /* Textos generales */
+    h1, h2, h3, h4, p, span, label, .stMarkdown {
+        color: #F1F5F9;
     }
-    .top-banner p {
-        margin: 0.3rem 0 0 0;
-        font-size: 1rem;
-        color: #CCFBF1;
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: #94A3B8 !important;
     }
+
     /* Tarjetas contenedoras */
     [data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: #FFFFFF;
+        background-color: rgba(17, 24, 39, 0.85);
+        border: 1px solid #1F2937 !important;
+        border-radius: 16px !important;
+        padding: 1.4rem 1.5rem !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    /* Inputs oscuros */
+    .stTextInput > div > div > input {
+        background-color: #0F172A !important;
+        color: #F8FAFC !important;
+        border: 1px solid #334155 !important;
+        border-radius: 10px !important;
+        padding: 0.65rem 0.9rem !important;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: #6366F1 !important;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25) !important;
+    }
+
+    /* File uploader oscuro */
+    [data-testid="stFileUploaderDropzone"] {
+        background-color: #0F172A !important;
+        border: 1.5px dashed #334155 !important;
         border-radius: 12px !important;
-        border: 1px solid #E2E8F0 !important;
-        padding: 1.1rem 1.25rem !important;
-        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
     }
-    /* Etiqueta de paso */
-    .paso-badge {
-        display: inline-block;
-        background-color: #CCFBF1;
-        color: #0F766E;
-        font-weight: 700;
-        font-size: 0.82rem;
-        padding: 0.22rem 0.65rem;
-        border-radius: 999px;
-        margin-bottom: 0.4rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+    [data-testid="stFileUploaderDropzone"]:hover {
+        border-color: #6366F1 !important;
     }
-    .paso-titulo {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #0F172A;
-        margin: 0 0 0.6rem 0;
+
+    /* Botones */
+    .stButton > button, .stFormSubmitButton > button {
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        padding: 0.65rem 1.2rem !important;
+        background-color: #1E293B !important;
+        color: #F8FAFC !important;
+        border: 1px solid #334155 !important;
+        transition: all 0.2s ease;
     }
-    /* Pestañas grandes */
+    .stButton > button:hover, .stFormSubmitButton > button:hover {
+        border-color: #6366F1 !important;
+        background-color: #273549 !important;
+    }
+    .stButton > button[kind="primary"], .stFormSubmitButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%) !important;
+        border: none !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+    }
+    .stButton > button[kind="primary"]:hover, .stFormSubmitButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #4F46E5 0%, #4338CA 100%) !important;
+    }
+
+    .stDownloadButton > button {
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        padding: 0.75rem 1.2rem !important;
+        background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+    }
+
+    /* Pestañas estilo pill */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background-color: transparent;
+        gap: 8px;
+        background-color: #111827;
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid #1F2937;
+        width: fit-content;
     }
     .stTabs [data-baseweb="tab"] {
-        background-color: #FFFFFF;
-        border-radius: 10px;
-        padding: 0.65rem 1.4rem;
-        font-size: 1rem;
+        background-color: transparent;
+        border-radius: 8px;
+        padding: 0.55rem 1.3rem;
         font-weight: 600;
-        color: #334155;
-        border: 1px solid #CBD5E1;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #0F766E !important;
-        color: #FFFFFF !important;
-        border-color: #0F766E !important;
-    }
-    /* Botones más grandes y visibles */
-    .stButton > button {
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 1rem;
-        padding: 0.65rem 1.2rem;
-        border: 1px solid #CBD5E1;
-    }
-    .stButton > button[kind="primary"] {
-        background-color: #0F766E;
-        border-color: #0F766E;
-        color: #FFFFFF;
-    }
-    .stButton > button[kind="primary"]:hover {
-        background-color: #115E59;
-        border-color: #115E59;
-    }
-    .stDownloadButton > button {
-        border-radius: 10px;
-        font-weight: 700;
-        font-size: 1rem;
-        padding: 0.75rem 1.2rem;
-        background-color: #0F766E;
-        color: #FFFFFF;
+        color: #94A3B8;
         border: none;
     }
-    .stDownloadButton > button:hover {
-        background-color: #115E59;
-        color: #FFFFFF;
+    .stTabs [aria-selected="true"] {
+        background-color: #6366F1 !important;
+        color: #FFFFFF !important;
     }
+
     /* Métricas */
     div[data-testid="stMetric"] {
-        background-color: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-radius: 12px;
-        padding: 1rem 1.2rem;
-        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+        background-color: #111827;
+        border: 1px solid #1F2937;
+        border-radius: 14px;
+        padding: 1.1rem 1.3rem;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 1.6rem;
-        font-weight: 700;
-        color: #0F766E;
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
     }
     div[data-testid="stMetricLabel"] {
+        color: #94A3B8 !important;
+    }
+
+    /* Login específico */
+    .login-brand {
+        text-align: center;
+        margin-bottom: 1.2rem;
+    }
+    .login-pill {
+        display: inline-block;
+        background: rgba(99, 102, 241, 0.15);
+        color: #A5B4FC;
+        border: 1px solid rgba(99, 102, 241, 0.35);
+        padding: 0.25rem 0.8rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-bottom: 0.8rem;
+    }
+    .login-title {
+        font-size: 1.7rem;
+        font-weight: 700;
+        color: #FFFFFF;
+        margin: 0;
+    }
+    .login-sub {
         font-size: 0.92rem;
+        color: #94A3B8;
+        margin-top: 0.35rem;
+    }
+
+    /* Encabezado interno */
+    .app-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 0.8rem;
+        margin-bottom: 0.8rem;
+        border-bottom: 1px solid #1F2937;
+    }
+    .app-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #FFFFFF;
+        margin: 0;
+    }
+    .app-sub {
+        font-size: 0.92rem;
+        color: #94A3B8;
+        margin: 0.15rem 0 0 0;
+    }
+    .step-tag {
+        color: #818CF8;
+        font-size: 0.78rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-bottom: 0.25rem;
+    }
+    .step-title {
+        color: #F8FAFC;
+        font-size: 1.12rem;
         font-weight: 600;
-        color: #475569;
+        margin: 0 0 0.75rem 0;
     }
     </style>
     """,
@@ -175,29 +239,45 @@ def _get_secret_or_env(key: str) -> Optional[str]:
     return env_val.strip() if env_val and env_val.strip() else None
 
 
-# --- AUTENTICACIÓN ---
+# --- PANTALLA DE ACCESO REDISEÑADA ---
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
 app_password = _get_secret_or_env("APP_PASSWORD")
 if app_password and not st.session_state.autenticado:
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    _, col_login, _ = st.columns([1.2, 1.6, 1.2])
-    with col_login:
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    _, col_center, _ = st.columns([1.3, 1.4, 1.3])
+    with col_center:
         with st.container(border=True):
-            st.markdown("### 3CICON — IVA Compras")
-            st.write("Ingresá la contraseña para entrar al sistema.")
-            pwd = st.text_input("Contraseña", type="password", placeholder="Escribí tu clave...")
-            if st.button("Entrar", type="primary", use_container_width=True):
-                if pwd == app_password:
-                    st.session_state.autenticado = True
-                    st.rerun()
-                else:
-                    st.error("Contraseña incorrecta.")
+            st.markdown(
+                """
+                <div class="login-brand">
+                    <div class="login-pill">3CICON SAS</div>
+                    <div class="login-title">Portal de Facturas</div>
+                    <div class="login-sub">Ingresá tu clave para acceder al sistema</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            with st.form("login_form", border=False):
+                pwd = st.text_input(
+                    "Contraseña",
+                    type="password",
+                    placeholder="••••••••",
+                    label_visibility="collapsed",
+                )
+                st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+                submitted = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
+                if submitted:
+                    if pwd == app_password:
+                        st.session_state.autenticado = True
+                        st.rerun()
+                    else:
+                        st.error("Contraseña incorrecta.")
     st.stop()
 
 
-# --- UTILIDADES (MISMA LÓGICA INTACTA) ---
+# --- UTILIDADES (LÓGICA INTACTA) ---
 def _parse_fecha_celda(val: Any) -> Optional[date]:
     if isinstance(val, date) and not isinstance(val, datetime):
         return val
@@ -270,45 +350,47 @@ def _crear_zip_renombrado(items_zip: list[tuple[str, bytes]]) -> bytes:
     return buf.getvalue()
 
 
-# --- ENCABEZADO SUPERIOR + ACCIONES RÁPIDAS ---
-col_hdr, col_actions = st.columns([4, 1.4], vertical_alignment="center")
-with col_hdr:
+# --- BARRA SUPERIOR ---
+c_top1, c_top2, c_top3 = st.columns([4.5, 1, 1], vertical_alignment="center")
+with c_top1:
     st.markdown(
         """
-        <div class="top-banner">
-            <h1>3CICON — Carga de Facturas</h1>
-            <p>Subí tu planilla del mes y las facturas. El sistema lee los datos, los ordena y renombra los archivos.</p>
+        <div>
+            <div class="app-title">3CICON — Gestión de Facturas</div>
+            <div class="app-sub">Extracción automática, actualización de planilla IVA Compras y renombrado</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-with col_actions:
-    if st.button("Limpiar todo", use_container_width=True):
+with c_top2:
+    if st.button("Limpiar lote", use_container_width=True):
         for k in ("lote_df", "archivos_raw", "excel_salida", "zip_salida", "reporte_escritura"):
             st.session_state.pop(k, None)
         st.rerun()
+with c_top3:
     if app_password:
-        if st.button("Cerrar sesión", use_container_width=True):
+        if st.button("Salir", use_container_width=True):
             st.session_state.autenticado = False
             st.rerun()
 
+st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-# --- NAVEGACIÓN POR PESTAÑAS ---
 tab_carga, tab_tablero = st.tabs(["Cargar Facturas", "Tablero de Control"])
 
 
 # ==============================================================================
-# PESTAÑA 1: CARGAR Y PROCESAR
+# PESTAÑA 1: CARGA Y PROCESAMIENTO
 # ==============================================================================
 with tab_carga:
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
     col_p1, col_p2 = st.columns(2, gap="medium")
 
     with col_p1:
         with st.container(border=True):
-            st.markdown('<span class="paso-badge">Paso 1</span>', unsafe_allow_html=True)
-            st.markdown('<div class="paso-titulo">Subí la planilla Excel del mes</div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-tag">Paso 1</div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-title">Planilla oficial del mes (.xlsx)</div>', unsafe_allow_html=True)
             excel_up = st.file_uploader(
-                "Archivo .xlsx oficial de 3CICON",
+                "Planilla Excel",
                 type=["xlsx"],
                 key="planilla_up",
                 label_visibility="collapsed",
@@ -318,41 +400,37 @@ with tab_carga:
                     pm_check = PlanillaMemoria(excel_up.getvalue())
                     est = pm_check.resumen_estado()
                     st.success(
-                        f"Planilla lista — Cargadas: **{est['cantidad_cargadas']}** | "
-                        f"Próxima fila: **{est['proxima_fila']}** | "
-                        f"Libres: **{est['filas_libres']}**"
+                        f"Cargadas: {est['cantidad_cargadas']}  •  "
+                        f"Próxima fila: {est['proxima_fila']}  •  "
+                        f"Libres: {est['filas_libres']}"
                     )
                 except ErrorPlanilla as err_p:
                     st.error(str(err_p))
-            else:
-                st.caption("Elegí o arrastrá el archivo Excel de IVA Compras.")
 
     with col_p2:
         with st.container(border=True):
-            st.markdown('<span class="paso-badge">Paso 2</span>', unsafe_allow_html=True)
-            st.markdown('<div class="paso-titulo">Subí las facturas (PDF o fotos)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-tag">Paso 2</div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-title">Comprobantes (PDF o fotos)</div>', unsafe_allow_html=True)
             facturas_up = st.file_uploader(
-                "Podés subir varias facturas juntas",
+                "Facturas",
                 type=["pdf", "jpg", "jpeg", "png"],
                 accept_multiple_files=True,
                 key="facturas_up",
                 label_visibility="collapsed",
             )
             if facturas_up:
-                st.info(f"**{len(facturas_up)} archivo(s)** seleccionado(s) para leer.")
-            else:
-                st.caption("Podés arrastrar varios PDF, JPG o PNG al mismo tiempo.")
+                st.info(f"{len(facturas_up)} archivo(s) listo(s) para procesar.")
 
     if facturas_up:
-        st.markdown("")
-        if st.button(f"Leer {len(facturas_up)} factura(s) automáticamente", type="primary", use_container_width=True):
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+        if st.button(f"Procesar {len(facturas_up)} factura(s)", type="primary", use_container_width=True):
             filas_lote = []
             archivos_raw: dict[str, bytes] = {}
             progreso = st.progress(0)
             estado_txt = st.empty()
 
             for idx, archivo in enumerate(facturas_up, start=1):
-                estado_txt.info(f"Leyendo factura {idx} de {len(facturas_up)}: **{archivo.name}** ...")
+                estado_txt.info(f"Analizando {idx}/{len(facturas_up)}: {archivo.name}")
                 contenido = archivo.getvalue()
                 archivos_raw[archivo.name] = contenido
                 ext = os.path.splitext(archivo.name)[1].lower()
@@ -414,15 +492,13 @@ with tab_carga:
             st.session_state.pop("excel_salida", None)
             st.session_state.pop("zip_salida", None)
             st.session_state.pop("reporte_escritura", None)
-            st.success("¡Lectura terminada! Revisá los datos abajo antes de guardar.")
+            st.success("Extracción completada. Revisá la tabla antes de guardar.")
 
-    # --- PASO 3: REVISIÓN EDITABLE ---
     if "lote_df" in st.session_state and not st.session_state.lote_df.empty:
-        st.markdown("")
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
         with st.container(border=True):
-            st.markdown('<span class="paso-badge">Paso 3</span>', unsafe_allow_html=True)
-            st.markdown('<div class="paso-titulo">Revisá los datos antes de pasarlos al Excel</div>', unsafe_allow_html=True)
-            st.caption("Hacé clic en cualquier celda si querés corregir un dato. Destildá 'Incluir' si no querés cargar una fila.")
+            st.markdown('<div class="step-tag">Paso 3</div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-title">Revisión y edición</div>', unsafe_allow_html=True)
 
             df_edit = st.data_editor(
                 st.session_state.lote_df,
@@ -453,17 +529,16 @@ with tab_carga:
             )
             st.session_state.lote_df = df_edit
 
-        # --- PASO 4: GUARDAR Y DESCARGAR ---
-        st.markdown("")
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
         with st.container(border=True):
-            st.markdown('<span class="paso-badge">Paso 4</span>', unsafe_allow_html=True)
-            st.markdown('<div class="paso-titulo">Generar Excel actualizado y archivos renombrados</div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-tag">Paso 4</div>', unsafe_allow_html=True)
+            st.markdown('<div class="step-title">Exportar resultados</div>', unsafe_allow_html=True)
 
             nc_neg = st.checkbox("Cargar Notas de Crédito en negativo", value=True)
 
-            if st.button("Guardar facturas en la planilla", type="primary", use_container_width=True):
+            if st.button("Guardar en Planilla y Generar Descargas", type="primary", use_container_width=True):
                 if excel_up is None:
-                    st.error("Falta subir la planilla Excel del mes en el Paso 1.")
+                    st.error("Subí primero la planilla Excel en el Paso 1.")
                 else:
                     try:
                         planilla = PlanillaMemoria(excel_up.getvalue())
@@ -509,12 +584,12 @@ with tab_carga:
                         st.session_state.nombre_excel_salida = excel_up.name
                         st.session_state.zip_salida = _crear_zip_renombrado(items_zip) if items_zip else None
                         st.session_state.reporte_escritura = pd.DataFrame(reporte)
-                        st.success("¡Listo! Ya podés descargar los archivos acá abajo.")
+                        st.success("Archivos generados correctamente.")
                     except ErrorPlanilla as err_e:
                         st.error(str(err_e))
 
             if "reporte_escritura" in st.session_state:
-                st.markdown("")
+                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
                 col_d1, col_d2 = st.columns(2, gap="medium")
                 with col_d1:
                     st.download_button(
@@ -543,9 +618,10 @@ with tab_carga:
 # PESTAÑA 2: TABLERO DE CONTROL
 # ==============================================================================
 with tab_tablero:
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
     if "lote_df" not in st.session_state or st.session_state.lote_df.empty:
         with st.container(border=True):
-            st.info("Todavía no hay facturas procesadas. Cargá al menos una en la pestaña **Cargar Facturas** para ver el resumen.")
+            st.info("Procesá al menos una factura en 'Cargar Facturas' para ver el tablero.")
     else:
         df_t = st.session_state.lote_df[st.session_state.lote_df["incluir"] == True].copy()
         tot_general = df_t["total"].sum()
@@ -564,12 +640,12 @@ with tab_tablero:
         m3.metric("Impuestos / Percepciones", f"$ {tot_imp:,.2f}")
         m4.metric("Comprobantes", f"{len(df_t)}")
 
-        st.markdown("")
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
         c_g1, c_g2 = st.columns(2, gap="medium")
 
         with c_g1:
             with st.container(border=True):
-                st.markdown('<div class="paso-titulo">Composición del Gasto (%)</div>', unsafe_allow_html=True)
+                st.markdown('<div class="step-title">Composición del Gasto (%)</div>', unsafe_allow_html=True)
                 df_comp = pd.DataFrame(
                     {
                         "Concepto": ["Neto Gravado", "IVA", "Impuestos / Percepciones"],
@@ -584,7 +660,8 @@ with tab_tablero:
                         theta=alt.Theta("Monto:Q", stack=True),
                         color=alt.Color(
                             "Concepto:N",
-                            scale=alt.Scale(range=["#0F766E", "#14B8A6", "#F59E0B"]),
+                            scale=alt.Scale(range=["#6366F1", "#10B981", "#F59E0B"]),
+                            legend=alt.Legend(labelColor="#E2E8F0", titleColor="#94A3B8"),
                         ),
                         tooltip=[
                             "Concepto",
@@ -594,11 +671,16 @@ with tab_tablero:
                     )
                     pie = base.mark_arc(innerRadius=55, outerRadius=120)
                     txt = base.mark_text(radius=88, size=13, fontWeight="bold", color="#FFFFFF").encode(text="Etiqueta:N")
-                    st.altair_chart((pie + txt).properties(height=340), use_container_width=True)
+                    chart_pie = (
+                        (pie + txt)
+                        .properties(height=340, background="transparent")
+                        .configure_view(strokeWidth=0)
+                    )
+                    st.altair_chart(chart_pie, use_container_width=True)
 
         with c_g2:
             with st.container(border=True):
-                st.markdown('<div class="paso-titulo">Top Proveedores por Monto</div>', unsafe_allow_html=True)
+                st.markdown('<div class="step-title">Top Proveedores por Monto</div>', unsafe_allow_html=True)
                 df_prov = (
                     df_t.groupby("razon_social_emisor", as_index=False)["total"]
                     .sum()
@@ -608,12 +690,13 @@ with tab_tablero:
                 if not df_prov.empty:
                     bar = (
                         alt.Chart(df_prov)
-                        .mark_bar(color="#0F766E", cornerRadiusEnd=6)
+                        .mark_bar(color="#6366F1", cornerRadiusEnd=6)
                         .encode(
-                            x=alt.X("total:Q", title="Total ($)"),
-                            y=alt.Y("razon_social_emisor:N", sort="-x", title="Proveedor"),
+                            x=alt.X("total:Q", title="Total ($)", axis=alt.Axis(labelColor="#94A3B8", titleColor="#94A3B8", gridColor="#1F2937")),
+                            y=alt.Y("razon_social_emisor:N", sort="-x", title="", axis=alt.Axis(labelColor="#E2E8F0")),
                             tooltip=["razon_social_emisor", alt.Tooltip("total:Q", format="$,.2f")],
                         )
-                        .properties(height=340)
+                        .properties(height=340, background="transparent")
+                        .configure_view(strokeWidth=0)
                     )
                     st.altair_chart(bar, use_container_width=True)
