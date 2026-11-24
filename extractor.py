@@ -198,7 +198,7 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
     if hubo_429 and ultimo_error is not None:
         raise RuntimeError(
             f"Límite de cuota de Gemini alcanzado (429 RESOURCE_EXHAUSTED). "
-            f"Revisá tu plan/cuota o usá la carga manual para no frenar el cierre. Detalle: {ultimo_error}"
+            f"Usá la carga manual para no frenar el cierre. Detalle: {ultimo_error}"
         )
 
     raise RuntimeError(
