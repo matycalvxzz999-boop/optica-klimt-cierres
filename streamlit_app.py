@@ -29,24 +29,193 @@ ARCHIVO_LOCK = "optica_klimt_local.lock"
 LOGO_CANDIDATOS = ("logo.png", "logo.jpg")
 
 st.set_page_config(
-    page_title="Óptica Klimt - Tablero de Comando Gerencial",
+    page_title="Óptica Klimt — Gestión de Caja",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# --- ESTILOS UI ---
+# --- ESTILOS OBSIDIANA + ESMERALDA & DORADO ---
 st.markdown(
     """
     <style>
-    .main { background-color: #F8F9FA; }
-    .stButton>button { border-radius: 6px; font-weight: 500; }
-    .stDownloadButton>button {
-        border-radius: 6px;
-        font-weight: 600;
-        background-color: #1F4E78;
-        color: white;
+    /* Fondo general oscuro cálido */
+    .stApp {
+        background: radial-gradient(circle at top left, #17231E 0%, #0D1110 50%, #080A09 100%);
+        color: #F4F4F5;
     }
-    div[data-testid="stMetricValue"] { font-size: 1.45rem; color: #1F4E78; }
+    /* Ocultar sidebar */
+    [data-testid="stSidebar"], [data-testid="collapsedControl"] {
+        display: none;
+    }
+    header[data-testid="stHeader"] {
+        background: transparent;
+    }
+
+    h1, h2, h3, h4, p, span, label, .stMarkdown {
+        color: #F4F4F5;
+    }
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: #A1A1AA !important;
+    }
+
+    /* Tarjetas */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: rgba(20, 25, 23, 0.88);
+        border: 1px solid #26332D !important;
+        border-radius: 16px !important;
+        padding: 1.3rem 1.45rem !important;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+    }
+
+    /* Inputs */
+    .stTextInput > div > div > input,
+    .stNumberInput > div > div > input,
+    .stDateInput > div > div > input {
+        background-color: #111614 !important;
+        color: #FAFAFA !important;
+        border: 1px solid #2E3D36 !important;
+        border-radius: 10px !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stNumberInput > div > div > input:focus {
+        border-color: #D4AF37 !important;
+        box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.22) !important;
+    }
+
+    /* File uploader */
+    [data-testid="stFileUploaderDropzone"] {
+        background-color: #111614 !important;
+        border: 1.5px dashed #2E3D36 !important;
+        border-radius: 12px !important;
+    }
+    [data-testid="stFileUploaderDropzone"]:hover {
+        border-color: #10B981 !important;
+    }
+
+    /* Botones */
+    .stButton > button, .stFormSubmitButton > button {
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        padding: 0.62rem 1.15rem !important;
+        background-color: #1A221F !important;
+        color: #F4F4F5 !important;
+        border: 1px solid #2E3D36 !important;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover, .stFormSubmitButton > button:hover {
+        border-color: #D4AF37 !important;
+        background-color: #222D28 !important;
+    }
+    .stButton > button[kind="primary"], .stFormSubmitButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+        border: none !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 4px 14px rgba(16, 185, 129, 0.32);
+    }
+    .stButton > button[kind="primary"]:hover, .stFormSubmitButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+    }
+
+    .stDownloadButton > button {
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        padding: 0.7rem 1.2rem !important;
+        background: linear-gradient(135deg, #D4AF37 0%, #B48A1E 100%) !important;
+        color: #0B0F0D !important;
+        border: none !important;
+        box-shadow: 0 4px 14px rgba(212, 175, 55, 0.28);
+    }
+    .stDownloadButton > button:hover {
+        background: linear-gradient(135deg, #E2BE48 0%, #C49825 100%) !important;
+        color: #0B0F0D !important;
+    }
+
+    /* Pestañas principales */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: #121715;
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid #26332D;
+        width: fit-content;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: transparent;
+        border-radius: 8px;
+        padding: 0.52rem 1.25rem;
+        font-weight: 600;
+        color: #A1A1AA;
+        border: none;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #10B981 !important;
+        color: #FFFFFF !important;
+    }
+
+    /* Métricas */
+    div[data-testid="stMetric"] {
+        background-color: #121715;
+        border: 1px solid #26332D;
+        border-radius: 14px;
+        padding: 1rem 1.2rem;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
+        color: #FFFFFF !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        color: #A1A1AA !important;
+    }
+
+    /* Insignias y títulos */
+    .klimt-pill {
+        display: inline-block;
+        background: rgba(212, 175, 55, 0.14);
+        color: #E2BE48;
+        border: 1px solid rgba(212, 175, 55, 0.35);
+        padding: 0.22rem 0.75rem;
+        border-radius: 999px;
+        font-size: 0.76rem;
+        font-weight: 700;
+        letter-spacing: 0.9px;
+        text-transform: uppercase;
+    }
+    .status-badge {
+        display: inline-block;
+        background: rgba(16, 185, 129, 0.14);
+        color: #34D399;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        padding: 0.2rem 0.7rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 600;
+    }
+    .klimt-title {
+        font-size: 1.65rem;
+        font-weight: 700;
+        color: #FFFFFF;
+        margin: 0;
+    }
+    .klimt-sub {
+        font-size: 0.92rem;
+        color: #A1A1AA;
+        margin: 0.15rem 0 0 0;
+    }
+    .sec-tag {
+        color: #E2BE48;
+        font-size: 0.76rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-bottom: 0.2rem;
+    }
+    .sec-title {
+        color: #FAFAFA;
+        font-size: 1.12rem;
+        font-weight: 600;
+        margin: 0 0 0.7rem 0;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -148,7 +317,7 @@ def obtener_cliente_supabase() -> Optional[Client]:
     return _crear_cliente_supabase_cached(url, key)
 
 
-def mostrar_logo(width: int = 180) -> bool:
+def mostrar_logo(width: int = 160) -> bool:
     for ruta in LOGO_CANDIDATOS:
         if os.path.exists(ruta):
             st.image(ruta, width=width)
@@ -222,7 +391,6 @@ def to_dec(val: Decimal | float | int | str | None) -> Decimal:
 
 
 def desglosar_iva_21(bruto: Decimal) -> tuple[Decimal, Decimal]:
-    """Aplica divisor estricto 1.21 con redondeo contable ROUND_HALF_UP."""
     bruto = to_dec(bruto)
     if bruto == Decimal("0.00"):
         return Decimal("0.00"), Decimal("0.00")
@@ -644,19 +812,8 @@ def _estilizar_encabezado(ws, row_idx: int, num_cols: int, color_hex: str = COLO
 
 def _ajustar_columnas_hoja_unica(ws):
     anchos_fijos = {
-        1: 15,
-        2: 14,
-        3: 14,
-        4: 15,
-        5: 15,
-        6: 15,
-        7: 15,
-        8: 15,
-        9: 15,
-        10: 14,
-        11: 15,
-        12: 16,
-        13: 42,
+        1: 15, 2: 14, 3: 14, 4: 15, 5: 15, 6: 15, 7: 15,
+        8: 15, 9: 15, 10: 14, 11: 15, 12: 16, 13: 42,
     }
     for col in ws.columns:
         col_idx = col[0].column
@@ -686,7 +843,6 @@ def generar_excel_unico_bytes(
     num_cols_cierres = 13
     fecha_emision = ahora_arg().strftime("%d/%m/%Y %H:%M")
 
-    # --- ENCABEZADO PRINCIPAL ---
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=num_cols_cierres)
     c_tit = ws.cell(row=1, column=1, value="ÓPTICA KLIMT — PLANILLA GENERAL DE CIERRES DE CAJA")
     c_tit.font = Font(bold=True, size=15, color=COLOR_PRIMARIO)
@@ -706,30 +862,16 @@ def generar_excel_unico_bytes(
 
     fila_actual = 4
 
-    # --- CUADRO 1: CIERRES DIARIOS ---
     _estilizar_banner_seccion(
-        ws,
-        fila_actual,
-        num_cols_cierres,
-        f"1. CIERRES DIARIOS POR FECHA Y TURNO — {etiqueta_rango}",
-        COLOR_PRIMARIO,
+        ws, fila_actual, num_cols_cierres,
+        f"1. CIERRES DIARIOS POR FECHA Y TURNO — {etiqueta_rango}", COLOR_PRIMARIO,
     )
     fila_actual += 1
 
     headers_cierres = [
-        "Fecha",
-        "Turno",
-        "Cajero",
-        "Efectivo",
-        "MP Neto",
-        "MP IVA (21%)",
-        "BBVA Neto",
-        "BBVA IVA (21%)",
-        "Provincia",
-        "Gastos",
-        "Celia / Toti",
-        "Diferencia Caja",
-        "Observaciones / Detalle",
+        "Fecha", "Turno", "Cajero", "Efectivo", "MP Neto", "MP IVA (21%)",
+        "BBVA Neto", "BBVA IVA (21%)", "Provincia", "Gastos", "Celia / Toti",
+        "Diferencia Caja", "Observaciones / Detalle",
     ]
     for idx_h, h_txt in enumerate(headers_cierres, start=1):
         ws.cell(row=fila_actual, column=idx_h, value=h_txt)
@@ -809,14 +951,7 @@ def generar_excel_unico_bytes(
 
     fila_actual += 2
 
-    # --- CUADRO 2: RESUMEN DE RUBROS E IMPUESTOS ---
-    _estilizar_banner_seccion(
-        ws,
-        fila_actual,
-        3,
-        "2. RESUMEN DE RUBROS, IVA (21%) Y RETIROS",
-        COLOR_INGRESOS_HDR,
-    )
+    _estilizar_banner_seccion(ws, fila_actual, 3, "2. RESUMEN DE RUBROS, IVA (21%) Y RETIROS", COLOR_INGRESOS_HDR)
     fila_actual += 1
 
     ws.cell(row=fila_actual, column=1, value="Rubro / Concepto")
@@ -845,14 +980,11 @@ def generar_excel_unico_bytes(
         c1 = ws.cell(row=fila_actual, column=1, value=concepto)
         c2 = ws.cell(row=fila_actual, column=2, value=formula_val)
         c3 = ws.cell(row=fila_actual, column=3, value=ref_txt)
-
         for c_item in (c1, c2, c3):
             c_item.border = BORDE_SUAVE
-
         c2.number_format = FORMATO_MONEDA_ARS
         c2.alignment = Alignment(horizontal="right", vertical="center")
         c3.alignment = Alignment(horizontal="left", vertical="center")
-
         if es_destacado:
             c1.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
             c2.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
@@ -883,7 +1015,6 @@ def generar_excel_unico_bytes(
     c_v_val.alignment = Alignment(horizontal="right", vertical="center")
     fila_actual += 2
 
-    # --- CUADRO 3: DETALLE DE OPERACIONES Y GASTOS / RETIROS ---
     movimientos_filas: list[tuple[str, str, str, str, float]] = []
     for r_data in registros:
         cierre_obj, _, _, _ = _registro_db_a_cierre(r_data)
@@ -892,9 +1023,7 @@ def generar_excel_unico_bytes(
         for op in cierre_obj.operaciones:
             movimientos_filas.append(
                 (
-                    f_txt,
-                    t_txt,
-                    "INGRESO",
+                    f_txt, t_txt, "INGRESO",
                     f"{ETIQUETAS_MEDIO_PAGO.get(op.medio_pago, op.medio_pago)} — {op.detalle}",
                     float(to_dec(op.monto)),
                 )
@@ -904,15 +1033,8 @@ def generar_excel_unico_bytes(
             movimientos_filas.append((f_txt, t_txt, tipo_lbl, g.concepto, float(to_dec(g.monto))))
 
     if movimientos_filas:
-        _estilizar_banner_seccion(
-            ws,
-            fila_actual,
-            5,
-            "3. DETALLE DE OPERACIONES, GASTOS Y RETIROS",
-            COLOR_EGRESOS_HDR,
-        )
+        _estilizar_banner_seccion(ws, fila_actual, 5, "3. DETALLE DE OPERACIONES, GASTOS Y RETIROS", COLOR_EGRESOS_HDR)
         fila_actual += 1
-
         headers_mov = ["Fecha", "Turno", "Tipo", "Detalle / Concepto", "Monto (ARS)"]
         for idx_m, m_txt in enumerate(headers_mov, start=1):
             ws.cell(row=fila_actual, column=idx_m, value=m_txt)
@@ -928,7 +1050,6 @@ def generar_excel_unico_bytes(
             c_pm = ws.cell(row=fila_actual, column=3, value=tipo_m)
             c_dm = ws.cell(row=fila_actual, column=4, value=sanitizar_celda_excel(det_m))
             c_vm = ws.cell(row=fila_actual, column=5, value=monto_m)
-
             c_fm.alignment = Alignment(horizontal="center", vertical="center")
             c_tm.alignment = Alignment(horizontal="center", vertical="center")
             c_pm.alignment = Alignment(horizontal="center", vertical="center")
@@ -936,7 +1057,6 @@ def generar_excel_unico_bytes(
             c_dm.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
             c_vm.number_format = FORMATO_MONEDA_ARS
             c_vm.alignment = Alignment(horizontal="right", vertical="center")
-
             for c_item in (c_fm, c_tm, c_pm, c_dm, c_vm):
                 c_item.border = BORDE_SUAVE
                 if fill_m:
@@ -958,17 +1078,14 @@ def generar_excel_unico_bytes(
             cel.fill = PatternFill(start_color="F8E8DC", end_color="F8E8DC", fill_type="solid")
         fila_actual += 2
 
-    # --- CUADRO 4: BITÁCORA DE AUDITORÍA ---
     if eventos_auditoria:
         _estilizar_banner_seccion(ws, fila_actual, 6, "4. REGISTRO DE AUDITORÍA Y CAMBIOS", COLOR_AUD_HDR)
         fila_actual += 1
-
         headers_aud = ["Fecha / Hora", "Usuario", "Acción", "Fecha Cierre", "Turno", "Detalle"]
         for idx_a, a_txt in enumerate(headers_aud, start=1):
             ws.cell(row=fila_actual, column=idx_a, value=a_txt)
         _estilizar_encabezado(ws, fila_actual, 6, COLOR_AUD_HDR)
         fila_actual += 1
-
         for idx_ev, ev in enumerate(eventos_auditoria[:50]):
             ws.row_dimensions[fila_actual].height = 19
             fill_a = PatternFill(start_color="F5F5F5", end_color="F5F5F5", fill_type="solid") if idx_ev % 2 == 1 else None
@@ -1107,7 +1224,7 @@ def migrar_excel_anterior(file_bytes: bytes, usuario_actor: str = "Admin") -> tu
     return filas_importadas, advertencias
 
 
-# --- AUTENTICACIÓN ---
+# --- PANTALLA DE ACCESO ---
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
@@ -1117,53 +1234,340 @@ if not app_password:
     st.stop()
 
 if not st.session_state.autenticado:
-    col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
-    with col_l2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        mostrar_logo(width=180)
-        st.markdown("## Acceso Restringido — Óptica Klimt")
-        st.write("Ingrese la contraseña institucional para continuar.")
-        pwd = st.text_input("Contraseña:", type="password")
-        if st.button("Ingresar", type="primary", use_container_width=True):
-            if pwd == app_password:
-                st.session_state.autenticado = True
-                st.rerun()
-            else:
-                st.error("Contraseña incorrecta.")
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    _, col_center, _ = st.columns([1.3, 1.4, 1.3])
+    with col_center:
+        with st.container(border=True):
+            c_logo1, c_logo2, c_logo3 = st.columns([1, 2, 1])
+            with c_logo2:
+                mostrar_logo(width=150)
+            st.markdown(
+                """
+                <div style="text-align:center; margin: 0.6rem 0 1.1rem 0;">
+                    <div class="klimt-pill">Óptica Klimt</div>
+                    <div style="font-size:1.6rem; font-weight:700; color:#FFFFFF; margin-top:0.5rem;">Cierres de Caja</div>
+                    <div style="font-size:0.9rem; color:#A1A1AA; margin-top:0.2rem;">Ingresá tu clave institucional</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            with st.form("login_klimt", border=False):
+                pwd = st.text_input("Contraseña", type="password", placeholder="••••••••", label_visibility="collapsed")
+                st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+                if st.form_submit_button("Ingresar", type="primary", use_container_width=True):
+                    if pwd == app_password:
+                        st.session_state.autenticado = True
+                        st.rerun()
+                    else:
+                        st.error("Contraseña incorrecta.")
     st.stop()
 
-# --- ESTADO DE PERSISTENCIA ---
+# --- ENCABEZADO PRINCIPAL ---
 usa_supabase = obtener_cliente_supabase() is not None
+badge_db = "Supabase Activa" if usa_supabase else "Modo Local JSON"
 
-# --- MENÚ LATERAL ---
-with st.sidebar:
-    if not mostrar_logo(width=200):
-        st.markdown("### Óptica Klimt")
-
-    st.write("Tablero de Comando Gerencial")
-    if usa_supabase:
-        st.caption("Persistencia: Supabase (Activa)")
-    else:
-        st.caption("Persistencia: Local JSON (configurá Supabase para persistencia en nube)")
-    st.divider()
-
-    menu_opcion = st.radio(
-        "Navegación",
-        ["Procesar Cierre Diario", "Tablero de Comando (Resumen)"],
-        label_visibility="collapsed",
+c_h1, c_h2, c_h3 = st.columns([0.9, 4.3, 1.1], vertical_alignment="center")
+with c_h1:
+    if not mostrar_logo(width=110):
+        st.markdown('<div class="klimt-pill">KLIMT</div>', unsafe_allow_html=True)
+with c_h2:
+    st.markdown(
+        f"""
+        <div>
+            <div class="klimt-title">Óptica Klimt — Control de Caja</div>
+            <div class="klimt-sub">Auditoría diaria, desglose de IVA (21%) y tablero gerencial &nbsp; <span class="status-badge">● {badge_db}</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-
-    st.divider()
-    if st.button("Cerrar Sesión", use_container_width=True):
+with c_h3:
+    if st.button("Cerrar sesión", use_container_width=True):
         st.session_state.autenticado = False
         st.session_state.pop("resultado", None)
         st.session_state.pop("guardado_maestro", None)
         st.rerun()
 
-# --- VISTA 1: TABLERO DE COMANDO ---
-if menu_opcion == "Tablero de Comando (Resumen)":
-    st.title("Óptica Klimt — Tablero de Comando Gerencial")
-    st.write("Vista ejecutiva del consolidado, discriminación de IVA (21%) y exportación en una sola hoja de Excel.")
+st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+tab_cierre, tab_tablero = st.tabs(["Procesar Cierre Diario", "Tablero de Comando"])
+
+
+# ==============================================================================
+# PESTAÑA 1: PROCESAR CIERRE DIARIO
+# ==============================================================================
+with tab_cierre:
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
+    with st.container(border=True):
+        st.markdown('<div class="sec-tag">Inicio rápido</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title">Cargar libreta con IA o iniciar carga manual</div>', unsafe_allow_html=True)
+
+        col_modo1, col_modo2 = st.columns([2.4, 1], vertical_alignment="center")
+        with col_modo1:
+            uploaded_file = st.file_uploader(
+                "Foto de la planilla (JPG, PNG)",
+                type=["jpg", "jpeg", "png"],
+                label_visibility="collapsed",
+            )
+        with col_modo2:
+            if st.button("Carga manual (sin foto)", use_container_width=True):
+                st.session_state.resultado = CierreDia(
+                    fecha=ahora_arg().date(),
+                    turno="Único",
+                    cajero="Celia",
+                    saldo_inicial=Decimal("0.00"),
+                    operaciones=[],
+                    gastos_retiros=[],
+                    observaciones="",
+                )
+                st.session_state.guardado_maestro = False
+                st.rerun()
+
+        if uploaded_file is not None:
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            col_img, col_act = st.columns([1, 1.6], gap="large", vertical_alignment="center")
+            with col_img:
+                st.image(uploaded_file, caption="Planilla cargada", use_container_width=True)
+            with col_act:
+                st.info("Imagen lista. Tocá el botón para que la IA extraiga los importes y medios de pago.")
+                if st.button("Procesar Cierre con IA", type="primary", use_container_width=True):
+                    try:
+                        with st.spinner("Analizando libreta y validando importes..."):
+                            resultado = extraer_cierre_gemini(uploaded_file.getvalue())
+                            st.session_state.resultado = resultado
+                            st.session_state.guardado_maestro = False
+                            st.success("Planilla procesada correctamente.")
+                    except Exception as e:
+                        st.error(f"Error al procesar: {e}")
+
+    if "resultado" in st.session_state:
+        res: CierreDia = st.session_state.resultado
+        if res.fecha is None:
+            res.fecha = ahora_arg().date()
+        res.turno = normalizar_turno(res.turno)
+
+        arqueo_dict: dict[int, int] = {denom: 0 for denom in DENOMINACIONES_ARS}
+        sup_in = "Martín"
+        comentario_in = res.observaciones or ""
+
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+        sub_datos, sub_ops, sub_resumen = st.tabs(
+            ["1. Datos y Billetes", "2. Operaciones y Gastos", "3. Resumen y Guardar"]
+        )
+
+        with sub_datos:
+            st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown('<div class="sec-title">Información del Cierre</div>', unsafe_allow_html=True)
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                fecha_in = col_m1.date_input("Fecha contable", value=res.fecha)
+                turno_in = col_m2.text_input("Turno", value=res.turno)
+                cajero_in = col_m3.text_input("Cajero", value=res.cajero or "Celia")
+                saldo_ini_in = col_m4.number_input(
+                    "Saldo inicial caja ($)", min_value=0.0, step=1000.0, value=float(to_dec(res.saldo_inicial))
+                )
+
+                col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
+                sup_in = col_s1.text_input("Supervisor", value=sup_in)
+                caja_cuaderno_in = col_s2.number_input(
+                    "Total CAJA cuaderno ($)",
+                    min_value=0.0,
+                    step=1000.0,
+                    value=float(to_dec(res.caja_total_cuaderno)) if res.caja_total_cuaderno is not None else 0.0,
+                )
+                comentario_in = col_s3.text_input("Observaciones del cierre", value=comentario_in)
+
+                res.fecha = fecha_in
+                res.turno = normalizar_turno(turno_in)
+                res.cajero = (cajero_in or "Celia").strip() or "Celia"
+                res.saldo_inicial = to_dec(saldo_ini_in)
+                res.caja_total_cuaderno = to_dec(caja_cuaderno_in) if caja_cuaderno_in > 0 else None
+                res.observaciones = comentario_in
+
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown('<div class="sec-title">Arqueo de Billetes (ARS)</div>', unsafe_allow_html=True)
+                cols_billetes = st.columns(5)
+                for idx_b, denom in enumerate(DENOMINACIONES_ARS):
+                    with cols_billetes[idx_b % 5]:
+                        arqueo_dict[denom] = st.number_input(
+                            f"$ {denom:,}", min_value=0, step=1, value=0, key=f"bill_{denom}"
+                        )
+
+        with sub_ops:
+            st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown('<div class="sec-title">Operaciones / Ventas</div>', unsafe_allow_html=True)
+                df_ops_init = pd.DataFrame(
+                    [
+                        {
+                            "detalle": op.detalle,
+                            "monto": float(to_dec(op.monto)),
+                            "medio_pago": op.medio_pago,
+                            "confianza": op.confianza,
+                        }
+                        for op in (res.operaciones or [])
+                    ]
+                    if res.operaciones
+                    else [{"detalle": "", "monto": 0.0, "medio_pago": "efectivo", "confianza": "alta"}]
+                )
+
+                df_ops_edit = st.data_editor(
+                    df_ops_init,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key="editor_operaciones",
+                    column_config={
+                        "detalle": st.column_config.TextColumn("Detalle / Boleta"),
+                        "monto": st.column_config.NumberColumn("Monto (ARS)", min_value=0.0, step=100.0, format="$ %.2f"),
+                        "medio_pago": st.column_config.SelectboxColumn("Medio de Pago", options=MEDIOS_PAGO_OPCIONES),
+                        "confianza": st.column_config.SelectboxColumn("Confianza", options=["alta", "media", "baja"]),
+                    },
+                )
+
+                ops_actualizadas: list[Operacion] = []
+                for _, row in df_ops_edit.iterrows():
+                    monto_row = to_dec(row.get("monto"))
+                    det_row = str(row.get("detalle") or "").strip()
+                    if monto_row > Decimal("0.00") or det_row:
+                        mp_val = str(row.get("medio_pago") or "efectivo")
+                        if mp_val not in MEDIOS_PAGO_OPCIONES:
+                            mp_val = "efectivo"
+                        conf_val = str(row.get("confianza") or "alta")
+                        if conf_val not in ("alta", "media", "baja"):
+                            conf_val = "alta"
+                        ops_actualizadas.append(
+                            Operacion(detalle=det_row or "Venta", monto=monto_row, medio_pago=mp_val, confianza=conf_val)
+                        )
+                res.operaciones = ops_actualizadas
+
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown('<div class="sec-title">Gastos y Retiros</div>', unsafe_allow_html=True)
+                df_gastos_init = pd.DataFrame(
+                    [
+                        {"tipo": g.tipo, "concepto": g.concepto, "monto": float(to_dec(g.monto))}
+                        for g in (res.gastos_retiros or [])
+                    ]
+                    if res.gastos_retiros
+                    else [{"tipo": "gasto", "concepto": "", "monto": 0.0}]
+                )
+
+                df_gastos_edit = st.data_editor(
+                    df_gastos_init,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key="editor_gastos",
+                    column_config={
+                        "tipo": st.column_config.SelectboxColumn("Tipo", options=["gasto", "retiro"]),
+                        "concepto": st.column_config.TextColumn("Concepto"),
+                        "monto": st.column_config.NumberColumn("Monto (ARS)", min_value=0.0, step=100.0, format="$ %.2f"),
+                    },
+                )
+
+                gastos_actualizados: list[GastoRetiro] = []
+                for _, row in df_gastos_edit.iterrows():
+                    monto_g = to_dec(row.get("monto"))
+                    conc_g = str(row.get("concepto") or "").strip()
+                    if monto_g > Decimal("0.00") or conc_g:
+                        tipo_g = str(row.get("tipo") or "gasto")
+                        if tipo_g not in ("gasto", "retiro"):
+                            tipo_g = "gasto"
+                        gastos_actualizados.append(GastoRetiro(tipo=tipo_g, concepto=conc_g or "Egreso", monto=monto_g))
+                res.gastos_retiros = gastos_actualizados
+
+        d = procesar_datos_dia(res, arqueo_conteo=arqueo_dict)
+
+        with sub_resumen:
+            st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Efectivo Ventas", f"$ {d['efectivo']:,.2f}")
+            c2.metric("Mercado Pago", f"$ {d['mp_bruto']:,.2f}", f"IVA: $ {d['mp_iva']:,.2f}")
+            c3.metric("Payway BBVA", f"$ {d['bbva_bruto']:,.2f}", f"IVA: $ {d['bbva_iva']:,.2f}")
+            c4.metric("Provincia", f"$ {d['provincia']:,.2f}")
+            c5.metric("Retiros (Celia/Toti)", f"$ {d['celia_toti']:,.2f}", f"Gastos: $ {d['gastos']:,.2f}")
+
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Esperado Efectivo Caja", f"$ {d['efectivo_esperado_caja']:,.2f}")
+            k2.metric("Total Billetes Contados", f"$ {d['total_contado_billetes']:,.2f}", f"Dif: $ {d['diferencia_arqueo']:,.2f}")
+            k3.metric("Total General Esperado", f"$ {d['total_general_esperado']:,.2f}")
+            k4.metric(
+                "Diferencia vs. Cuaderno",
+                f"$ {d['diferencia_cuaderno']:,.2f}" if d["tiene_caja_cuaderno"] else "Sin dato",
+            )
+
+            if res.campos_dudosos:
+                st.warning(f"Revisar valores poco claros: {', '.join(res.campos_dudosos)}")
+
+            st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown('<div class="sec-title">Confirmación y Exportación</div>', unsafe_allow_html=True)
+                fecha_iso_actual = res.fecha.strftime("%Y-%m-%d")
+                existente_colision = buscar_cierre_existente(fecha_iso_actual, res.turno)
+                confirmar_colision = True
+                if existente_colision is not None and not st.session_state.get("guardado_maestro", False):
+                    st.warning(
+                        f"Ya existe un cierre confirmado para **{fecha_iso_actual}** y turno **{res.turno}** "
+                        f"(actualizado: {existente_colision.get('actualizado_en', 's/d')})."
+                    )
+                    confirmar_colision = st.checkbox(
+                        "Confirmo reemplazar el cierre existente (el anterior queda en Auditoría)",
+                        key="confirmar_reemplazo_cierre",
+                    )
+
+                col_dl1, col_dl2 = st.columns(2, gap="medium")
+                with col_dl1:
+                    if not st.session_state.get("guardado_maestro", False):
+                        if st.button("Confirmar y Guardar Cierre", type="primary", use_container_width=True):
+                            try:
+                                ok, msg = guardar_cierre_persistente(
+                                    res=res,
+                                    arqueo_conteo=arqueo_dict,
+                                    supervisor=sup_in,
+                                    comentario_auditor=comentario_in,
+                                    usuario_actor="Usuario",
+                                    confirmar_reemplazo=confirmar_colision,
+                                )
+                                if ok:
+                                    st.session_state.guardado_maestro = True
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                            except Exception as e_save:
+                                st.error(f"Error al guardar el cierre: {e_save}")
+                    else:
+                        st.success("Cierre confirmado y guardado en la fuente de verdad.")
+
+                with col_dl2:
+                    if st.button("Preparar Excel Consolidado (.xlsx)", use_container_width=True):
+                        todos_act = obtener_todos_los_cierres()
+                        aud_act = obtener_auditoria()
+                        st.session_state.excel_cierre_bytes = generar_excel_unico_bytes(
+                            registros=todos_act,
+                            eventos_auditoria=aud_act,
+                            etiqueta_rango="Consolidado_Actual",
+                        )
+
+                    if "excel_cierre_bytes" in st.session_state:
+                        nombre_unico_cierre = (
+                            f"Optica_Klimt_Cierres_{fecha_iso_actual}_{sanitizar_nombre_archivo(res.turno)}.xlsx"
+                        )
+                        st.download_button(
+                            label="Descargar Excel (.xlsx)",
+                            data=st.session_state.excel_cierre_bytes,
+                            file_name=nombre_unico_cierre,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+
+
+# ==============================================================================
+# PESTAÑA 2: TABLERO DE COMANDO
+# ==============================================================================
+with tab_tablero:
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
     try:
         todos_cierres = obtener_todos_los_cierres()
@@ -1174,30 +1578,34 @@ if menu_opcion == "Tablero de Comando (Resumen)":
     fechas_disponibles = sorted({str(r.get("fecha", "")) for r in todos_cierres if r.get("fecha")})
     meses_disponibles = sorted({f[:7] for f in fechas_disponibles if len(f) >= 7}, reverse=True)
 
-    st.subheader("Filtro de Período para Tablero y Excel")
-    modo_filtro = st.radio(
-        "Seleccionar período:",
-        ["Todo el histórico", "Por mes", "Rango de fechas"],
-        horizontal=True,
-    )
+    with st.container(border=True):
+        st.markdown('<div class="sec-tag">Filtro de Período</div>', unsafe_allow_html=True)
+        modo_filtro = st.radio(
+            "Seleccionar período",
+            ["Todo el histórico", "Por mes", "Rango de fechas"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
 
-    cierres_filtrados = todos_cierres
-    etiqueta_rango = "Todo el histórico"
+        cierres_filtrados = todos_cierres
+        etiqueta_rango = "Todo el histórico"
 
-    if modo_filtro == "Por mes" and meses_disponibles:
-        mes_sel = st.selectbox("Mes (AAAA-MM):", meses_disponibles)
-        cierres_filtrados = [r for r in todos_cierres if str(r.get("fecha", "")).startswith(mes_sel)]
-        etiqueta_rango = f"Mes {mes_sel}"
-    elif modo_filtro == "Rango de fechas" and fechas_disponibles:
-        f_min = date.fromisoformat(fechas_disponibles[0][:10])
-        f_max = date.fromisoformat(fechas_disponibles[-1][:10])
-        c_f1, c_f2 = st.columns(2)
-        desde_f = c_f1.date_input("Desde:", value=f_min)
-        hasta_f = c_f2.date_input("Hasta:", value=f_max)
-        d_iso = desde_f.strftime("%Y-%m-%d")
-        h_iso = hasta_f.strftime("%Y-%m-%d")
-        cierres_filtrados = [r for r in todos_cierres if d_iso <= str(r.get("fecha", ""))[:10] <= h_iso]
-        etiqueta_rango = f"{d_iso} a {h_iso}"
+        if modo_filtro == "Por mes" and meses_disponibles:
+            mes_sel = st.selectbox("Mes (AAAA-MM)", meses_disponibles)
+            cierres_filtrados = [r for r in todos_cierres if str(r.get("fecha", "")).startswith(mes_sel)]
+            etiqueta_rango = f"Mes {mes_sel}"
+        elif modo_filtro == "Rango de fechas" and fechas_disponibles:
+            f_min = date.fromisoformat(fechas_disponibles[0][:10])
+            f_max = date.fromisoformat(fechas_disponibles[-1][:10])
+            c_f1, c_f2 = st.columns(2)
+            desde_f = c_f1.date_input("Desde", value=f_min)
+            hasta_f = c_f2.date_input("Hasta", value=f_max)
+            d_iso = desde_f.strftime("%Y-%m-%d")
+            h_iso = hasta_f.strftime("%Y-%m-%d")
+            cierres_filtrados = [r for r in todos_cierres if d_iso <= str(r.get("fecha", ""))[:10] <= h_iso]
+            etiqueta_rango = f"{d_iso} a {h_iso}"
+
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
     if cierres_filtrados:
         df_view = pd.DataFrame(
@@ -1233,354 +1641,132 @@ if menu_opcion == "Tablero de Comando (Resumen)":
         total_iva_mes = t_mp_iva + t_bbva_iva
         total_general_ventas = t_efectivo + t_mp_total + t_bbva_total + t_provincia
 
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4 = st.columns(4, gap="medium")
         m1.metric("Ventas Totales", f"$ {total_general_ventas:,.2f}")
-        m2.metric("Total IVA Acumulado (21%)", f"$ {total_iva_mes:,.2f}")
-        m3.metric("Tarjetas / QR / Prov. Totales", f"$ {(t_mp_total + t_bbva_total + t_provincia):,.2f}")
+        m2.metric("IVA Acumulado (21%)", f"$ {total_iva_mes:,.2f}")
+        m3.metric("Tarjetas / QR / Prov.", f"$ {(t_mp_total + t_bbva_total + t_provincia):,.2f}")
         m4.metric("Retiros (Celia / Toti)", f"$ {t_celia:,.2f}")
 
-        st.divider()
-        st.subheader("Distribución de Ingresos por Medio de Pago (Bruto con IVA)")
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+        cg1, cg2 = st.columns(2, gap="medium")
 
-        df_pie = pd.DataFrame(
-            {
-                "Medio de Pago": ["Efectivo", "Mercado Pago", "Payway BBVA", "Posnet Provincia"],
-                "Monto": [float(t_efectivo), float(t_mp_total), float(t_bbva_total), float(t_provincia)],
-            }
-        )
-        df_pie = df_pie[df_pie["Monto"] > 0]
+        with cg1:
+            with st.container(border=True):
+                st.markdown('<div class="sec-title">Distribución por Medio de Pago (%)</div>', unsafe_allow_html=True)
+                df_pie = pd.DataFrame(
+                    {
+                        "Medio de Pago": ["Efectivo", "Mercado Pago", "Payway BBVA", "Posnet Provincia"],
+                        "Monto": [float(t_efectivo), float(t_mp_total), float(t_bbva_total), float(t_provincia)],
+                    }
+                )
+                df_pie = df_pie[df_pie["Monto"] > 0]
+                total_pie = df_pie["Monto"].sum()
+                if not df_pie.empty and total_pie > 0:
+                    df_pie["Porcentaje"] = (df_pie["Monto"] / total_pie) * 100
+                    df_pie["Etiqueta"] = df_pie["Porcentaje"].map(lambda p: f"{p:.1f}%")
 
-        total_pie = df_pie["Monto"].sum()
-        if not df_pie.empty and total_pie > 0:
-            df_pie["Porcentaje"] = (df_pie["Monto"] / total_pie) * 100
-            df_pie["Etiqueta"] = df_pie["Porcentaje"].map(lambda p: f"{p:.1f}%")
+                    base = alt.Chart(df_pie).encode(
+                        theta=alt.Theta(field="Monto", type="quantitative", stack=True),
+                        color=alt.Color(
+                            field="Medio de Pago",
+                            type="nominal",
+                            scale=alt.Scale(range=["#10B981", "#D4AF37", "#38BDF8", "#F97316"]),
+                            legend=alt.Legend(labelColor="#E4E4E7", titleColor="#A1A1AA"),
+                        ),
+                        tooltip=[
+                            "Medio de Pago",
+                            alt.Tooltip("Monto:Q", format="$,.2f"),
+                            alt.Tooltip("Porcentaje:Q", format=".1f", title="% del Total"),
+                        ],
+                    )
+                    pie = base.mark_arc(innerRadius=55, outerRadius=120)
+                    text = base.mark_text(radius=88, size=13, fontWeight="bold", color="#FFFFFF").encode(
+                        text=alt.Text("Etiqueta:N")
+                    )
+                    chart_pie = (pie + text).properties(height=340, background="transparent").configure_view(strokeWidth=0)
+                    st.altair_chart(chart_pie, use_container_width=True)
 
-            base = alt.Chart(df_pie).encode(
-                theta=alt.Theta(field="Monto", type="quantitative", stack=True),
-                color=alt.Color(
-                    field="Medio de Pago",
-                    type="nominal",
-                    scale=alt.Scale(range=["#2ECC71", "#3498DB", "#9B59B6", "#E67E22"]),
-                ),
-                tooltip=[
-                    "Medio de Pago",
-                    alt.Tooltip("Monto:Q", format="$,.2f"),
-                    alt.Tooltip("Porcentaje:Q", format=".1f", title="% del Total"),
-                ],
-            )
-
-            pie = base.mark_arc(innerRadius=55, outerRadius=125)
-            text = base.mark_text(radius=90, size=13, fontWeight="bold", color="#FFFFFF").encode(
-                text=alt.Text("Etiqueta:N")
-            )
-
-            st.altair_chart((pie + text).properties(height=360), use_container_width=True)
+        with cg2:
+            with st.container(border=True):
+                st.markdown('<div class="sec-title">Evolución Diaria de Ventas</div>', unsafe_allow_html=True)
+                df_evo = df_view.copy()
+                df_evo["Venta_Dia"] = (
+                    df_evo["Efectivo"]
+                    + df_evo["MP Neto"]
+                    + df_evo["MP IVA (21%)"]
+                    + df_evo["BBVA Neto"]
+                    + df_evo["BBVA IVA (21%)"]
+                    + df_evo["Provincia"]
+                )
+                df_evo = df_evo.groupby("Fecha", as_index=False)["Venta_Dia"].sum()
+                if not df_evo.empty:
+                    bar = (
+                        alt.Chart(df_evo)
+                        .mark_bar(color="#10B981", cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+                        .encode(
+                            x=alt.X("Fecha:N", title="", axis=alt.Axis(labelColor="#A1A1AA", labelAngle=-35)),
+                            y=alt.Y("Venta_Dia:Q", title="Ventas ($)", axis=alt.Axis(labelColor="#A1A1AA", titleColor="#A1A1AA", gridColor="#26332D")),
+                            tooltip=["Fecha", alt.Tooltip("Venta_Dia:Q", format="$,.2f", title="Total Ventas")],
+                        )
+                        .properties(height=340, background="transparent")
+                        .configure_view(strokeWidth=0)
+                    )
+                    st.altair_chart(bar, use_container_width=True)
     else:
         df_view = pd.DataFrame(columns=COLUMNAS_HISTORICO)
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Ventas Totales", "$ 0.00")
-        m2.metric("Total IVA Acumulado (21%)", "$ 0.00")
-        m3.metric("Tarjetas / QR / Prov. Totales", "$ 0.00")
+        m2.metric("IVA Acumulado (21%)", "$ 0.00")
+        m3.metric("Tarjetas / QR / Prov.", "$ 0.00")
         m4.metric("Retiros (Celia / Toti)", "$ 0.00")
         st.info("No hay cierres confirmados para el período seleccionado.")
 
-    st.divider()
-    st.subheader("Detalle Consolidado de Cierres")
-    st.dataframe(df_view, use_container_width=True)
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown('<div class="sec-title">Detalle Consolidado de Cierres</div>', unsafe_allow_html=True)
+        st.dataframe(df_view, use_container_width=True, hide_index=True)
 
-    eventos_aud = obtener_auditoria()
-    excel_unico_bytes = generar_excel_unico_bytes(
-        registros=cierres_filtrados,
-        eventos_auditoria=eventos_aud,
-        etiqueta_rango=etiqueta_rango,
-    )
-    nombre_unico = f"Optica_Klimt_Cierres_{sanitizar_nombre_archivo(etiqueta_rango)}.xlsx"
-
-    col_ex1, col_ex2, col_ex3 = st.columns(3)
-    with col_ex1:
-        st.download_button(
-            label="Descargar Excel (.xlsx)",
-            data=excel_unico_bytes,
-            file_name=nombre_unico,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-        )
-    with col_ex2:
-        backup_bytes = generar_excel_unico_bytes(
-            registros=todos_cierres,
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        eventos_aud = obtener_auditoria()
+        excel_unico_bytes = generar_excel_unico_bytes(
+            registros=cierres_filtrados,
             eventos_auditoria=eventos_aud,
-            etiqueta_rango="Backup_Completo",
+            etiqueta_rango=etiqueta_rango,
         )
-        st.download_button(
-            label="Descargar copia de seguridad (.xlsx)",
-            data=backup_bytes,
-            file_name=f"Backup_Optica_Klimt_{ahora_arg().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-    with col_ex3:
-        with st.expander("Migrar Excel anterior (.xlsx) a la fuente de verdad"):
-            excel_mig = st.file_uploader("Seleccionar cierre_mensual_optica.xlsx", type=["xlsx"], key="mig_xlsx")
-            confirm_mig = st.checkbox("Confirmo importar este archivo a la fuente de verdad", key="confirm_mig")
-            if excel_mig is not None and confirm_mig:
-                try:
-                    cant_ok, advs = migrar_excel_anterior(excel_mig.getvalue(), usuario_actor="Admin")
-                    st.success(f"Migración completada: {cant_ok} cierre(s) importado(s).")
-                    for a in advs:
-                        st.warning(a)
-                    st.rerun()
-                except Exception as err_mig:
-                    st.error(f"Error al migrar archivo: {err_mig}")
+        nombre_unico = f"Optica_Klimt_Cierres_{sanitizar_nombre_archivo(etiqueta_rango)}.xlsx"
 
-# --- VISTA 2: PROCESAR CIERRE DIARIO ---
-elif menu_opcion == "Procesar Cierre Diario":
-    st.title("Óptica Klimt — Procesamiento y Auditoría de Cierre Diario")
-    st.write("Subí la foto de la libreta para extraer con IA o iniciá una carga manual para editar y guardar.")
-
-    col_modo1, col_modo2 = st.columns([2, 1])
-    with col_modo1:
-        uploaded_file = st.file_uploader("Seleccionar imagen de la planilla (JPG, PNG)", type=["jpg", "jpeg", "png"])
-    with col_modo2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Cargar cierre manualmente (sin IA)", use_container_width=True):
-            st.session_state.resultado = CierreDia(
-                fecha=ahora_arg().date(),
-                turno="Único",
-                cajero="Celia",
-                saldo_inicial=Decimal("0.00"),
-                operaciones=[],
-                gastos_retiros=[],
-                observaciones="",
-            )
-            st.session_state.guardado_maestro = False
-            st.rerun()
-
-    if uploaded_file is not None:
-        col_img, col_act = st.columns([1, 1.5], gap="large")
-        with col_img:
-            st.image(uploaded_file, caption="Planilla cargada", use_container_width=True)
-        with col_act:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Procesar Cierre con IA", type="primary", use_container_width=True):
-                try:
-                    with st.spinner("Analizando libreta y validando importes..."):
-                        resultado = extraer_cierre_gemini(uploaded_file.getvalue())
-                        st.session_state.resultado = resultado
-                        st.session_state.guardado_maestro = False
-                        st.success("Planilla procesada correctamente.")
-                except Exception as e:
-                    st.error(f"Error al procesar: {e}")
-
-    if "resultado" in st.session_state:
-        res: CierreDia = st.session_state.resultado
-        if res.fecha is None:
-            res.fecha = ahora_arg().date()
-        res.turno = normalizar_turno(res.turno)
-
-        arqueo_dict: dict[int, int] = {denom: 0 for denom in DENOMINACIONES_ARS}
-        sup_in = "Martín"
-        comentario_in = res.observaciones or ""
-
-        with st.expander("1. Datos del Cierre, Saldo Inicial y Arqueo de Billetes", expanded=True):
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            fecha_in = col_m1.date_input("Fecha contable:", value=res.fecha)
-            turno_in = col_m2.text_input("Turno:", value=res.turno)
-            cajero_in = col_m3.text_input("Cajero:", value=res.cajero or "Celia")
-            saldo_ini_in = col_m4.number_input(
-                "Saldo inicial caja ($):", min_value=0.0, step=1000.0, value=float(to_dec(res.saldo_inicial))
-            )
-
-            col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
-            sup_in = col_s1.text_input("Supervisor:", value=sup_in)
-            caja_cuaderno_in = col_s2.number_input(
-                "Total CAJA cuaderno ($, 0 si no aplica):",
-                min_value=0.0,
-                step=1000.0,
-                value=float(to_dec(res.caja_total_cuaderno)) if res.caja_total_cuaderno is not None else 0.0,
-            )
-            comentario_in = col_s3.text_input("Observaciones del cierre:", value=comentario_in)
-
-            res.fecha = fecha_in
-            res.turno = normalizar_turno(turno_in)
-            res.cajero = (cajero_in or "Celia").strip() or "Celia"
-            res.saldo_inicial = to_dec(saldo_ini_in)
-            res.caja_total_cuaderno = to_dec(caja_cuaderno_in) if caja_cuaderno_in > 0 else None
-            res.observaciones = comentario_in
-
-            st.markdown("**Conteo de Billetes (ARS):**")
-            cols_billetes = st.columns(5)
-            for idx_b, denom in enumerate(DENOMINACIONES_ARS):
-                with cols_billetes[idx_b % 5]:
-                    arqueo_dict[denom] = st.number_input(
-                        f"$ {denom:,}", min_value=0, step=1, value=0, key=f"bill_{denom}"
-                    )
-
-        with st.expander("2. Revisar y Editar Operaciones / Gastos antes de Guardar", expanded=True):
-            st.caption("Podés corregir montos, cambiar medios de pago, agregar filas nuevas o borrar filas erróneas.")
-
-            df_ops_init = pd.DataFrame(
-                [
-                    {
-                        "detalle": op.detalle,
-                        "monto": float(to_dec(op.monto)),
-                        "medio_pago": op.medio_pago,
-                        "confianza": op.confianza,
-                    }
-                    for op in (res.operaciones or [])
-                ]
-                if res.operaciones
-                else [{"detalle": "", "monto": 0.0, "medio_pago": "efectivo", "confianza": "alta"}]
-            )
-
-            df_ops_edit = st.data_editor(
-                df_ops_init,
-                num_rows="dynamic",
+        col_ex1, col_ex2, col_ex3 = st.columns(3, gap="medium")
+        with col_ex1:
+            st.download_button(
+                label="Descargar Excel (.xlsx)",
+                data=excel_unico_bytes,
+                file_name=nombre_unico,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
-                key="editor_operaciones",
-                column_config={
-                    "detalle": st.column_config.TextColumn("Detalle / Boleta"),
-                    "monto": st.column_config.NumberColumn("Monto (ARS)", min_value=0.0, step=100.0, format="$ %.2f"),
-                    "medio_pago": st.column_config.SelectboxColumn("Medio de Pago", options=MEDIOS_PAGO_OPCIONES),
-                    "confianza": st.column_config.SelectboxColumn("Confianza", options=["alta", "media", "baja"]),
-                },
             )
-
-            ops_actualizadas: list[Operacion] = []
-            for _, row in df_ops_edit.iterrows():
-                monto_row = to_dec(row.get("monto"))
-                det_row = str(row.get("detalle") or "").strip()
-                if monto_row > Decimal("0.00") or det_row:
-                    mp_val = str(row.get("medio_pago") or "efectivo")
-                    if mp_val not in MEDIOS_PAGO_OPCIONES:
-                        mp_val = "efectivo"
-                    conf_val = str(row.get("confianza") or "alta")
-                    if conf_val not in ("alta", "media", "baja"):
-                        conf_val = "alta"
-                    ops_actualizadas.append(
-                        Operacion(detalle=det_row or "Venta", monto=monto_row, medio_pago=mp_val, confianza=conf_val)
-                    )
-            res.operaciones = ops_actualizadas
-
-            df_gastos_init = pd.DataFrame(
-                [
-                    {
-                        "tipo": g.tipo,
-                        "concepto": g.concepto,
-                        "monto": float(to_dec(g.monto)),
-                    }
-                    for g in (res.gastos_retiros or [])
-                ]
-                if res.gastos_retiros
-                else [{"tipo": "gasto", "concepto": "", "monto": 0.0}]
+        with col_ex2:
+            backup_bytes = generar_excel_unico_bytes(
+                registros=todos_cierres,
+                eventos_auditoria=eventos_aud,
+                etiqueta_rango="Backup_Completo",
             )
-
-            df_gastos_edit = st.data_editor(
-                df_gastos_init,
-                num_rows="dynamic",
+            st.download_button(
+                label="Descargar Backup Completo (.xlsx)",
+                data=backup_bytes,
+                file_name=f"Backup_Optica_Klimt_{ahora_arg().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
-                key="editor_gastos",
-                column_config={
-                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["gasto", "retiro"]),
-                    "concepto": st.column_config.TextColumn("Concepto"),
-                    "monto": st.column_config.NumberColumn("Monto (ARS)", min_value=0.0, step=100.0, format="$ %.2f"),
-                },
             )
-
-            gastos_actualizados: list[GastoRetiro] = []
-            for _, row in df_gastos_edit.iterrows():
-                monto_g = to_dec(row.get("monto"))
-                conc_g = str(row.get("concepto") or "").strip()
-                if monto_g > Decimal("0.00") or conc_g:
-                    tipo_g = str(row.get("tipo") or "gasto")
-                    if tipo_g not in ("gasto", "retiro"):
-                        tipo_g = "gasto"
-                    gastos_actualizados.append(GastoRetiro(tipo=tipo_g, concepto=conc_g or "Egreso", monto=monto_g))
-            res.gastos_retiros = gastos_actualizados
-
-        d = procesar_datos_dia(res, arqueo_conteo=arqueo_dict)
-
-        st.divider()
-        st.subheader(f"Resumen Auditado — Fecha: {res.fecha.strftime('%d/%m/%Y')} | Turno: {res.turno}")
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Efectivo Ventas", f"$ {d['efectivo']:,.2f}")
-        c2.metric("Mercado Pago", f"$ {d['mp_bruto']:,.2f}", f"IVA: $ {d['mp_iva']:,.2f}")
-        c3.metric("Payway BBVA", f"$ {d['bbva_bruto']:,.2f}", f"IVA: $ {d['bbva_iva']:,.2f}")
-        c4.metric("Provincia", f"$ {d['provincia']:,.2f}")
-        c5.metric("Retiros (Celia/Toti)", f"$ {d['celia_toti']:,.2f}", f"Gastos: $ {d['gastos']:,.2f}")
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Esperado Efectivo Caja", f"$ {d['efectivo_esperado_caja']:,.2f}")
-        k2.metric("Total Billetes Contados", f"$ {d['total_contado_billetes']:,.2f}", f"Dif: $ {d['diferencia_arqueo']:,.2f}")
-        k3.metric("Total General Esperado", f"$ {d['total_general_esperado']:,.2f}")
-        k4.metric(
-            "Diferencia vs. Cuaderno",
-            f"$ {d['diferencia_cuaderno']:,.2f}" if d["tiene_caja_cuaderno"] else "Sin dato en cuaderno",
-        )
-
-        if res.campos_dudosos:
-            st.warning(f"Revisar valores marcados como poco claros: {', '.join(res.campos_dudosos)}")
-
-        fecha_iso_actual = res.fecha.strftime("%Y-%m-%d")
-        existente_colision = buscar_cierre_existente(fecha_iso_actual, res.turno)
-        confirmar_colision = True
-        if existente_colision is not None and not st.session_state.get("guardado_maestro", False):
-            st.warning(
-                f"Ya existe un cierre confirmado para **{fecha_iso_actual}** y turno **{res.turno}** "
-                f"(actualizado: {existente_colision.get('actualizado_en', 's/d')})."
-            )
-            confirmar_colision = st.checkbox(
-                "Confirmo reemplazar el cierre existente para esta fecha y turno (el anterior quedará guardado en Auditoría)",
-                key="confirmar_reemplazo_cierre",
-            )
-
-        st.divider()
-        st.subheader("Confirmación y Exportación")
-
-        col_dl1, col_dl2 = st.columns(2)
-        with col_dl1:
-            if not st.session_state.get("guardado_maestro", False):
-                if st.button("Confirmar y Guardar en Fuente de Verdad", type="primary", use_container_width=True):
+        with col_ex3:
+            with st.expander("Migrar Excel anterior (.xlsx)"):
+                excel_mig = st.file_uploader("Seleccionar cierre_mensual_optica.xlsx", type=["xlsx"], key="mig_xlsx")
+                confirm_mig = st.checkbox("Confirmo importar este archivo", key="confirm_mig")
+                if excel_mig is not None and confirm_mig:
                     try:
-                        ok, msg = guardar_cierre_persistente(
-                            res=res,
-                            arqueo_conteo=arqueo_dict,
-                            supervisor=sup_in,
-                            comentario_auditor=comentario_in,
-                            usuario_actor="Usuario",
-                            confirmar_reemplazo=confirmar_colision,
-                        )
-                        if ok:
-                            st.session_state.guardado_maestro = True
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                    except Exception as e_save:
-                        st.error(f"Error al guardar el cierre: {e_save}")
-            else:
-                st.info("Este cierre ya fue confirmado y guardado en la fuente de verdad.")
-
-        with col_dl2:
-            if st.button("Preparar Excel Consolidado (.xlsx)", use_container_width=True):
-                todos_act = obtener_todos_los_cierres()
-                aud_act = obtener_auditoria()
-                st.session_state.excel_cierre_bytes = generar_excel_unico_bytes(
-                    registros=todos_act,
-                    eventos_auditoria=aud_act,
-                    etiqueta_rango="Consolidado_Actual",
-                )
-
-            if "excel_cierre_bytes" in st.session_state:
-                nombre_unico_cierre = (
-                    f"Optica_Klimt_Cierres_{fecha_iso_actual}_{sanitizar_nombre_archivo(res.turno)}.xlsx"
-                )
-                st.download_button(
-                    label="Descargar Excel (.xlsx)",
-                    data=st.session_state.excel_cierre_bytes,
-                    file_name=nombre_unico_cierre,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    use_container_width=True,
-                )
+                        cant_ok, advs = migrar_excel_anterior(excel_mig.getvalue(), usuario_actor="Admin")
+                        st.success(f"Migración completada: {cant_ok} cierre(s) importado(s).")
+                        for a in advs:
+                            st.warning(a)
+                        st.rerun()
+                    except Exception as err_mig:
+                        st.error(f"Error al migrar archivo: {err_mig}")
