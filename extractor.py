@@ -3,10 +3,9 @@ import logging
 import os
 import random
 import time
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Literal, Optional
-from zoneinfo import ZoneInfo
 
 from google import genai
 from google.genai import types
@@ -37,8 +36,7 @@ class Operacion(BaseModel):
         if v is None or v == "":
             return None
         try:
-            dec = Decimal(str(v).replace("$", "").strip())
-            return dec
+            return Decimal(str(v).replace("$", "").strip())
         except (InvalidOperation, ValueError):
             return None
 
@@ -54,8 +52,7 @@ class GastoRetiro(BaseModel):
         if v is None or v == "":
             return None
         try:
-            dec = Decimal(str(v).replace("$", "").strip())
-            return dec
+            return Decimal(str(v).replace("$", "").strip())
         except (InvalidOperation, ValueError):
             return None
 
@@ -83,7 +80,7 @@ Columnas habituales: [Productos / Boleta | EFECTIVO | TARJETA | MODO | ENTRADA |
 REGLAS ESTRICTAS DE EXTRACCIÓN:
 1. Transcribí ÚNICAMENTE los valores visibles en la imagen. Si un número está tachado, borroneado o es ilegible, devolvé null y describí la fila en "campos_dudosos". JAMÁS inventes ni estimes cifras.
 2. Formato numérico argentino: en la libreta el punto separa miles (ej: $37.000 = 37000, $165.000 = 165000). Devolvé números decimales puros sin puntos de miles ni signo $.
-3. Fecha contable en formato ISO (AAAA-MM-DD). Revisá el margen izquierdo vertical (ej: "17-11-26" -> "2026-11-17"). Si falta el año, asumí {ANIO_ACTUAL}.
+3. Fecha contable en formato ISO (AAAA-MM-DD). Revisá el margen izquierdo vertical (ej: "17-11-26" -> "2026-11-17"). Si falta el año, asumí 2026.
 4. Saldo inicial ("CAJA $13.000" en el margen izquierdo): cargalo en "saldo_inicial".
 5. CLASIFICACIÓN OBLIGATORIA DE MEDIO DE PAGO (mirar columna TARJETA y columna MODO):
   - Si el monto está en la columna EFECTIVO -> medio_pago = "efectivo".
@@ -105,13 +102,13 @@ REGLAS ESTRICTAS DE EXTRACCIÓN:
 
 def _obtener_api_key() -> Optional[str]:
     api_key = os.getenv("GEMINI_API_KEY")
-    if api_key:
+    if api_key and api_key.strip():
         return api_key.strip()
     try:
         import streamlit as st
 
         secret_key = st.secrets.get("GEMINI_API_KEY")
-        if secret_key:
+        if secret_key and str(secret_key).strip():
             return str(secret_key).strip()
     except Exception:
         pass
@@ -133,20 +130,6 @@ def _preparar_imagen(img_path_or_bytes: bytes | str) -> Image.Image:
     return img
 
 
-def _crear_config_generacion() -> "types.GenerateContentConfig":
-    """JSON estructurado con razonamiento bajo ('low': minimiza latencia; 'minimal' no lo acepta gemini-3.8-flash).
-    Si el SDK instalado es viejo y no soporta thinking_level, se usa la configuración sin esa opción."""
-    base = dict(response_mime_type="application/json", response_schema=CierreDia, temperature=0.0)
-    try:
-        return types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_level="low"),
-            **base,
-        )
-    except Exception as e:
-        logger.warning("SDK sin soporte de thinking_level (%s); se usa la configuración estándar.", e)
-        return types.GenerateContentConfig(**base)
-
-
 def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
     api_key = _obtener_api_key()
     if not api_key:
@@ -154,45 +137,36 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
 
     client = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=90000, api_version="v1beta"),
+        http_options=types.HttpOptions(timeout=45000),
     )
 
     img = _preparar_imagen(img_path_or_bytes)
-    anio_actual = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).year
-    prompt = SYSTEM_PROMPT.replace("{ANIO_ACTUAL}", str(anio_actual))
 
-    # Modelos vigentes para cuentas nuevas (ver ai.google.dev/gemini-api/docs/deprecations).
-    # - gemini-2.5-*: Google los limitó a quienes ya los usaban (da 404 en cuentas nuevas).
-    # - gemini-3.7-flash se omite a propósito: Google lo redirige a gemini-3.8-flash.
     modelos_candidatos = [
         "gemini-3.8-flash",
         "gemini-3.6-flash",
     ]
-    config_generacion = _crear_config_generacion()
-    inicio_total = time.monotonic()
-    presupuesto_seg = 200  # tiempo máximo total antes de rendirse y mostrar el error
-    max_rondas = 2
 
     ultimo_error: Optional[Exception] = None
-    hubo_error_transitorio = False
-    errores_por_modelo: dict[str, str] = {}
-    modelos_no_disponibles: set[str] = set()
+    hubo_429 = False
 
-    for ronda in range(max_rondas):
-        for modelo in modelos_candidatos:
-            if modelo in modelos_no_disponibles:
-                continue
-            if time.monotonic() - inicio_total > presupuesto_seg:
-                break
+    for modelo in modelos_candidatos:
+        max_reintentos = 2
+        for intento in range(max_reintentos):
             try:
                 response = client.models.generate_content(
                     model=modelo,
                     contents=[
                         img,
-                        prompt
+                        SYSTEM_PROMPT
                         + "\nDevolvé el resultado estrictamente en formato JSON bajo el esquema CierreDia.",
                     ],
-                    config=config_generacion,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=CierreDia,
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_level="low"),
+                    ),
                 )
                 if not response.text:
                     raise ValueError(f"El modelo {modelo} devolvió una respuesta vacía.")
@@ -201,36 +175,33 @@ def extraer_cierre_gemini(img_path_or_bytes: bytes | str) -> CierreDia:
             except Exception as e:
                 ultimo_error = e
                 err_str = str(e)
-                errores_por_modelo[modelo] = err_str[:250]
-                if any(
-                    code in err_str
-                    for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "504", "DEADLINE")
-                ):
-                    # Modelo saturado: no se espera ni se repite, se pasa al siguiente modelo de inmediato.
-                    hubo_error_transitorio = True
-                    logger.warning("Modelo %s saturado o lento (ronda %s): %s", modelo, ronda + 1, err_str[:200])
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    hubo_429 = True
+                    logger.warning("Cuota agotada / límite 429 en modelo %s: %s", modelo, err_str)
+                    break
+                if any(code in err_str for code in ("503", "UNAVAILABLE", "504", "DEADLINE")):
+                    espera = (2.0 * (intento + 1)) + random.uniform(0.1, 0.5)
+                    logger.warning(
+                        "Reintento %s/%s para modelo %s tras error transitorio: %s",
+                        intento + 1,
+                        max_reintentos,
+                        modelo,
+                        err_str,
+                    )
+                    time.sleep(espera)
                     continue
                 if "404" in err_str or "NOT_FOUND" in err_str:
-                    modelos_no_disponibles.add(modelo)
-                    logger.warning("Modelo %s no disponible (404), se descarta.", modelo)
-                    continue
+                    logger.warning("Modelo %s no disponible (404), pasando al siguiente candidato.", modelo)
+                    break
                 raise RuntimeError(f"Error al interpretar la planilla con {modelo}: {err_str}") from e
 
-        # Fin de ronda: ¿tiene sentido volver a intentar?
-        if all(m in modelos_no_disponibles for m in modelos_candidatos):
-            break
-        if time.monotonic() - inicio_total > presupuesto_seg:
-            break
-        if ronda < max_rondas - 1:
-            time.sleep(5 * (ronda + 1) + random.uniform(0.1, 0.7))
-
-    detalle_modelos = " || ".join(f"{m}: {err}" for m, err in errores_por_modelo.items())
-    if hubo_error_transitorio:
+    if hubo_429 and ultimo_error is not None:
         raise RuntimeError(
-            "Los servidores de Gemini están saturados en este momento (error de Google, no de tu planilla). "
-            f"Esperá un minuto y volvé a presionar 'Procesar Cierre con IA'. Detalle por modelo: {detalle_modelos}"
+            f"Límite de cuota de Gemini alcanzado (429 RESOURCE_EXHAUSTED). "
+            f"Revisá tu plan/cuota o usá la carga manual para no frenar el cierre. Detalle: {ultimo_error}"
         )
+
     raise RuntimeError(
-        f"Ningún modelo respondió ({', '.join(modelos_candidatos)}). Verificá GEMINI_API_KEY, "
-        f"sus permisos y los nombres de modelo. Detalle por modelo: {detalle_modelos}"
+        f"Los servidores de IA están experimentando saturación temporal (503/504). "
+        f"Aguardá unos segundos, reintentá o cargá el cierre a mano. Detalle: {ultimo_error}"
     )
