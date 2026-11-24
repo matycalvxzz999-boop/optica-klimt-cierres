@@ -1250,22 +1250,31 @@ if menu_opcion == "Tablero de Comando (Resumen)":
         )
         df_pie = df_pie[df_pie["Monto"] > 0]
 
-        if not df_pie.empty:
-            base_chart = (
-                alt.Chart(df_pie)
-                .mark_arc(innerRadius=55, outerRadius=125)
-                .encode(
-                    theta=alt.Theta(field="Monto", type="quantitative"),
-                    color=alt.Color(
-                        field="Medio de Pago",
-                        type="nominal",
-                        scale=alt.Scale(range=["#2ECC71", "#3498DB", "#9B59B6", "#E67E22"]),
-                    ),
-                    tooltip=["Medio de Pago", alt.Tooltip("Monto:Q", format="$,.2f")],
-                )
-                .properties(height=360)
+        total_pie = df_pie["Monto"].sum()
+        if not df_pie.empty and total_pie > 0:
+            df_pie["Porcentaje"] = (df_pie["Monto"] / total_pie) * 100
+            df_pie["Etiqueta"] = df_pie["Porcentaje"].map(lambda p: f"{p:.1f}%")
+
+            base = alt.Chart(df_pie).encode(
+                theta=alt.Theta(field="Monto", type="quantitative", stack=True),
+                color=alt.Color(
+                    field="Medio de Pago",
+                    type="nominal",
+                    scale=alt.Scale(range=["#2ECC71", "#3498DB", "#9B59B6", "#E67E22"]),
+                ),
+                tooltip=[
+                    "Medio de Pago",
+                    alt.Tooltip("Monto:Q", format="$,.2f"),
+                    alt.Tooltip("Porcentaje:Q", format=".1f", title="% del Total"),
+                ],
             )
-            st.altair_chart(base_chart, use_container_width=True)
+
+            pie = base.mark_arc(innerRadius=55, outerRadius=125)
+            text = base.mark_text(radius=90, size=13, fontWeight="bold", color="#FFFFFF").encode(
+                text=alt.Text("Etiqueta:N")
+            )
+
+            st.altair_chart((pie + text).properties(height=360), use_container_width=True)
     else:
         df_view = pd.DataFrame(columns=COLUMNAS_HISTORICO)
         m1, m2, m3, m4 = st.columns(4)
