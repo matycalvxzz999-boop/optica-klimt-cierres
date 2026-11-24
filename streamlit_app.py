@@ -23,9 +23,9 @@ from extractor import CierreDia, GastoRetiro, Operacion, extraer_cierre_gemini
 load_dotenv()
 
 ZONA_ARG = ZoneInfo("America/Argentina/Buenos_Aires")
-ARCHIVO_MAESTRO_LOCAL = "cierre_mensual_optica.xlsx"
+ARCHIVO_CIERRES_LOCAL = "cierres_local.json"
 ARCHIVO_AUDITORIA_LOCAL = "auditoria_cierres_local.json"
-ARCHIVO_LOCK = f"{ARCHIVO_MAESTRO_LOCAL}.lock"
+ARCHIVO_LOCK = "optica_klimt_local.lock"
 LOGO_CANDIDATOS = ("logo.png", "logo.jpg")
 
 st.set_page_config(
@@ -38,35 +38,27 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .main {
-        background-color: #F8F9FA;
-    }
-    .stButton>button {
-        border-radius: 6px;
-        font-weight: 500;
-    }
+    .main { background-color: #F8F9FA; }
+    .stButton>button { border-radius: 6px; font-weight: 500; }
     .stDownloadButton>button {
         border-radius: 6px;
         font-weight: 600;
         background-color: #1F4E78;
         color: white;
     }
-    div[data-testid="stMetricValue"] {
-        font-size: 1.45rem;
-        color: #1F4E78;
-    }
+    div[data-testid="stMetricValue"] { font-size: 1.45rem; color: #1F4E78; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # --- CONSTANTES DE DISEÑO EXCEL ---
-COLOR_PRIMARIO = "1F4E78"      # Azul oscuro institucional
-COLOR_SECUNDARIO = "D9E1F2"    # Azul claro totales
-COLOR_RESUMEN_HDR = "2F5597"   # Azul medio resumen
-COLOR_INGRESOS_HDR = "1E6B52"  # Verde oscuro ingresos
-COLOR_EGRESOS_HDR = "833C0C"   # Marrón/ámbar oscuro egresos/retiros
-COLOR_AUD_HDR = "3B3838"       # Gris oscuro auditoría
+COLOR_PRIMARIO = "1F4E78"
+COLOR_SECUNDARIO = "D9E1F2"
+COLOR_RESUMEN_HDR = "2F5597"
+COLOR_INGRESOS_HDR = "1E6B52"
+COLOR_EGRESOS_HDR = "833C0C"
+COLOR_AUD_HDR = "3B3838"
 COLOR_ZEBRA = "F4F7FB"
 
 FORMATO_MONEDA_ARS = '$ #,##0.00;-$ #,##0.00;"$ 0.00"'
@@ -100,6 +92,15 @@ COLUMNAS_HISTORICO = [
     "Observaciones / Detalle",
 ]
 
+MEDIOS_PAGO_OPCIONES = [
+    "efectivo",
+    "qr_mp",
+    "payway_bbva",
+    "posnet_provincia",
+    "transferencia",
+    "otro",
+]
+
 ETIQUETAS_MEDIO_PAGO = {
     "efectivo": "Efectivo",
     "qr_mp": "Mercado Pago (QR / Débito / Transf.)",
@@ -112,7 +113,7 @@ ETIQUETAS_MEDIO_PAGO = {
 DENOMINACIONES_ARS = [20000, 10000, 2000, 1000, 500, 200, 100, 50, 20, 10]
 
 
-# --- TIEMPO, SEGURIDAD Y ARCHIVOS ---
+# --- TIEMPO, SEGURIDAD Y CONEXIÓN ---
 def ahora_arg() -> datetime:
     return datetime.now(ZONA_ARG)
 
@@ -134,12 +135,17 @@ def obtener_password_configurada() -> Optional[str]:
     return _get_secret_or_env("APP_PASSWORD")
 
 
+@st.cache_resource(show_spinner=False)
+def _crear_cliente_supabase_cached(url: str, key: str) -> Client:
+    return create_client(url, key)
+
+
 def obtener_cliente_supabase() -> Optional[Client]:
     url = _get_secret_or_env("SUPABASE_URL")
     key = _get_secret_or_env("SUPABASE_KEY")
     if not url or not key:
         return None
-    return create_client(url, key)
+    return _crear_cliente_supabase_cached(url, key)
 
 
 def mostrar_logo(width: int = 180) -> bool:
@@ -352,23 +358,23 @@ def clave_cierre(fecha_iso: str, turno: str) -> str:
     return f"{fecha_iso}::{normalizar_turno(turno).lower()}"
 
 
-# --- FUENTE DE VERDAD PERSISTENTE (SUPABASE + FALLBACK LOCAL) ---
-def _leer_auditoria_local() -> list[dict[str, Any]]:
-    if not os.path.exists(ARCHIVO_AUDITORIA_LOCAL):
+# --- PERSISTENCIA (SUPABASE + FALLBACK JSON LOCAL) ---
+def _leer_json_local(ruta: str) -> list[dict[str, Any]]:
+    if not os.path.exists(ruta):
         return []
     try:
-        with open(ARCHIVO_AUDITORIA_LOCAL, "r", encoding="utf-8") as f:
+        with open(ruta, "r", encoding="utf-8") as f:
             data = json.load(f)
             return data if isinstance(data, list) else []
     except Exception:
         return []
 
 
-def _guardar_auditoria_local(eventos: list[dict[str, Any]]):
+def _guardar_json_local(ruta: str, datos: list[dict[str, Any]]):
     with bloqueo_archivo():
         guardar_bytes_atomico(
-            ARCHIVO_AUDITORIA_LOCAL,
-            json.dumps(eventos, ensure_ascii=False, indent=2).encode("utf-8"),
+            ruta,
+            json.dumps(datos, ensure_ascii=False, indent=2).encode("utf-8"),
         )
 
 
@@ -516,63 +522,13 @@ def _registro_db_a_cierre(reg: dict[str, Any]) -> tuple[CierreDia, dict[int, int
     return cierre, arqueo_conteo, supervisor, comentario
 
 
-def _leer_cierres_desde_local_excel() -> list[dict[str, Any]]:
-    if not os.path.exists(ARCHIVO_MAESTRO_LOCAL):
-        return []
-    try:
-        df = pd.read_excel(ARCHIVO_MAESTRO_LOCAL, skiprows=2)
-        if df.empty or "Fecha" not in df.columns:
-            return []
-        df = df.dropna(subset=["Fecha"])
-        df = df[~df["Fecha"].astype(str).str.contains("TOTAL|OPTICA|ÓPTICA", case=False, na=False)]
-        registros: list[dict[str, Any]] = []
-        for _, row in df.iterrows():
-            fecha_str = str(row["Fecha"])[:10]
-            turno_str = normalizar_turno(row["Turno"]) if "Turno" in df.columns else "Único"
-            ef = to_dec(row.get("Efectivo"))
-            mp_n = to_dec(row.get("MP Neto"))
-            mp_i = to_dec(row.get("MP IVA (21%)"))
-            bb_n = to_dec(row.get("BBVA Neto"))
-            bb_i = to_dec(row.get("BBVA IVA (21%)"))
-            prov = to_dec(row.get("Provincia"))
-            gast = to_dec(row.get("Gastos"))
-            ret = to_dec(row.get("Celia / Toti"))
-            dif = to_dec(row.get("Diferencia Caja"))
-            obs = str(row.get("Observaciones / Detalle") or "")
-
-            cierre = CierreDia(
-                fecha=date.fromisoformat(fecha_str),
-                turno=turno_str,
-                cajero="Celia",
-                saldo_inicial=Decimal("0.00"),
-                operaciones=[],
-                gastos_retiros=[],
-                observaciones=obs,
-            )
-            reg = _cierre_a_registro_db(cierre, usuario_actor="Migración Local")
-            reg["efectivo"] = float(ef)
-            reg["mp_neto"] = float(mp_n)
-            reg["mp_iva"] = float(mp_i)
-            reg["bbva_neto"] = float(bb_n)
-            reg["bbva_iva"] = float(bb_i)
-            reg["provincia"] = float(prov)
-            reg["gastos"] = float(gast)
-            reg["celia_toti"] = float(ret)
-            reg["diferencia_caja"] = float(dif)
-            reg["detalle_obs"] = obs
-            registros.append(reg)
-        return registros
-    except Exception:
-        return []
-
-
 def obtener_todos_los_cierres() -> list[dict[str, Any]]:
     sb = obtener_cliente_supabase()
     if sb is not None:
         resp = sb.table("cierres_caja").select("*").order("fecha", desc=False).order("turno", desc=False).execute()
         datos = resp.data or []
         return sorted(datos, key=lambda r: (str(r.get("fecha", "")), str(r.get("turno", ""))))
-    return sorted(_leer_cierres_desde_local_excel(), key=lambda r: (str(r.get("fecha", "")), str(r.get("turno", ""))))
+    return sorted(_leer_json_local(ARCHIVO_CIERRES_LOCAL), key=lambda r: (str(r.get("fecha", "")), str(r.get("turno", ""))))
 
 
 def obtener_auditoria() -> list[dict[str, Any]]:
@@ -580,7 +536,7 @@ def obtener_auditoria() -> list[dict[str, Any]]:
     if sb is not None:
         resp = sb.table("auditoria_cierres").select("*").order("creado_en", desc=True).limit(200).execute()
         return resp.data or []
-    return list(reversed(_leer_auditoria_local()))
+    return list(reversed(_leer_json_local(ARCHIVO_AUDITORIA_LOCAL)))
 
 
 def buscar_cierre_existente(fecha_iso: str, turno: str) -> Optional[dict[str, Any]]:
@@ -617,7 +573,7 @@ def guardar_cierre_persistente(
         "usuario": usuario_actor,
         "creado_en": ahora_arg().isoformat(),
         "detalle": (
-            f"Reemplazó cierre previo de {usuario_actor} ({existente.get('actualizado_en')})"
+            f"Reemplazó cierre previo ({existente.get('actualizado_en')})"
             if existente is not None
             else f"Alta de cierre ({reg_nuevo['cajero']})"
         ),
@@ -632,16 +588,16 @@ def guardar_cierre_persistente(
     else:
         actuales = [
             r
-            for r in _leer_cierres_desde_local_excel()
+            for r in _leer_json_local(ARCHIVO_CIERRES_LOCAL)
             if clave_cierre(str(r.get("fecha", "")), str(r.get("turno", ""))) != reg_nuevo["clave_cierre"]
         ]
         actuales.append(reg_nuevo)
         actuales = sorted(actuales, key=lambda r: (str(r.get("fecha", "")), str(r.get("turno", ""))))
-        _guardar_historico_local_desde_registros(actuales)
+        _guardar_json_local(ARCHIVO_CIERRES_LOCAL, actuales)
 
-        eventos = _leer_auditoria_local()
+        eventos = _leer_json_local(ARCHIVO_AUDITORIA_LOCAL)
         eventos.append(evento_auditoria)
-        _guardar_auditoria_local(eventos)
+        _guardar_json_local(ARCHIVO_AUDITORIA_LOCAL, eventos)
 
     return True, "Cierre guardado y registrado en auditoría."
 
@@ -688,19 +644,19 @@ def _estilizar_encabezado(ws, row_idx: int, num_cols: int, color_hex: str = COLO
 
 def _ajustar_columnas_hoja_unica(ws):
     anchos_fijos = {
-        1: 14,  # Fecha / Concepto
-        2: 14,  # Turno / Importe
-        3: 14,  # Cajero
-        4: 15,  # Efectivo
-        5: 15,  # MP Neto
-        6: 15,  # MP IVA
-        7: 15,  # BBVA Neto
-        8: 15,  # BBVA IVA
-        9: 15,  # Provincia
-        10: 14, # Gastos
-        11: 15, # Celia / Toti
-        12: 16, # Diferencia Caja
-        13: 42, # Observaciones / Detalle
+        1: 15,
+        2: 14,
+        3: 14,
+        4: 15,
+        5: 15,
+        6: 15,
+        7: 15,
+        8: 15,
+        9: 15,
+        10: 14,
+        11: 15,
+        12: 16,
+        13: 42,
     }
     for col in ws.columns:
         col_idx = col[0].column
@@ -717,16 +673,6 @@ def _ajustar_columnas_hoja_unica(ws):
         ws.column_dimensions[col_letter].width = max_len
 
 
-def _guardar_historico_local_desde_registros(registros: list[dict[str, Any]]):
-    excel_bytes = generar_excel_unico_bytes(
-        registros=registros,
-        eventos_auditoria=_leer_auditoria_local(),
-        etiqueta_rango="Consolidado_Local",
-    )
-    with bloqueo_archivo():
-        guardar_bytes_atomico(ARCHIVO_MAESTRO_LOCAL, excel_bytes)
-
-
 def generar_excel_unico_bytes(
     registros: list[dict[str, Any]],
     eventos_auditoria: list[dict[str, Any]],
@@ -740,7 +686,7 @@ def generar_excel_unico_bytes(
     num_cols_cierres = 13
     fecha_emision = ahora_arg().strftime("%d/%m/%Y %H:%M")
 
-    # --- ENCABEZADO PRINCIPAL CON TÍTULO Y FECHA ---
+    # --- ENCABEZADO PRINCIPAL ---
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=num_cols_cierres)
     c_tit = ws.cell(row=1, column=1, value="ÓPTICA KLIMT — PLANILLA GENERAL DE CIERRES DE CAJA")
     c_tit.font = Font(bold=True, size=15, color=COLOR_PRIMARIO)
@@ -751,7 +697,7 @@ def generar_excel_unico_bytes(
     c_sub = ws.cell(
         row=2,
         column=1,
-        value=sanitizar_celda_excel(f"Período / Filtro: {etiqueta_rango}   |   Fecha y hora de emisión: {fecha_emision} (ART)"),
+        value=sanitizar_celda_excel(f"Período / Filtro: {etiqueta_rango}   |   Emisión: {fecha_emision} (ART)"),
     )
     c_sub.font = Font(bold=True, size=10, color="333333")
     c_sub.fill = PatternFill(start_color="EAF0F7", end_color="EAF0F7", fill_type="solid")
@@ -760,7 +706,7 @@ def generar_excel_unico_bytes(
 
     fila_actual = 4
 
-    # --- CUADRO 1: DETALLE DE CIERRES DIARIOS ---
+    # --- CUADRO 1: CIERRES DIARIOS ---
     _estilizar_banner_seccion(
         ws,
         fila_actual,
@@ -867,20 +813,20 @@ def generar_excel_unico_bytes(
     _estilizar_banner_seccion(
         ws,
         fila_actual,
-        5,
+        3,
         "2. RESUMEN DE RUBROS, IVA (21%) Y RETIROS",
         COLOR_INGRESOS_HDR,
     )
     fila_actual += 1
 
-    headers_res = ["Rubro / Concepto", "Importe (ARS)", "Referencia", "", ""]
-    ws.cell(row=fila_actual, column=1, value=headers_res[0])
-    ws.cell(row=fila_actual, column=2, value=headers_res[1])
-    ws.cell(row=fila_actual, column=3, value=headers_res[2])
+    ws.cell(row=fila_actual, column=1, value="Rubro / Concepto")
+    ws.cell(row=fila_actual, column=2, value="Importe (ARS)")
+    ws.cell(row=fila_actual, column=3, value="Referencia")
     _estilizar_encabezado(ws, fila_actual, 3, COLOR_INGRESOS_HDR)
     fila_actual += 1
 
     r_tot = fila_total_cierres
+    fila_res_inicio = fila_actual
     resumen_items = [
         ("Efectivo", f"=D{r_tot}", "Caja / ventas en efectivo", False),
         ("Mercado Pago Neto", f"=E{r_tot}", "Bruto / 1.21", False),
@@ -888,22 +834,20 @@ def generar_excel_unico_bytes(
         ("Payway BBVA Neto", f"=G{r_tot}", "Bruto / 1.21", False),
         ("Payway BBVA IVA (21%)", f"=H{r_tot}", "Débito fiscal BBVA", True),
         ("Posnet Provincia", f"=I{r_tot}", "Cobros Posnet Provincia", False),
-        ("Total IVA (21%)", f"=B{fila_actual + 2}+B{fila_actual + 4}", "MP IVA + BBVA IVA", True),
+        ("Total IVA (21%)", f"=B{fila_res_inicio + 2}+B{fila_res_inicio + 4}", "MP IVA + BBVA IVA", True),
         ("Gastos", f"=J{r_tot}", "Gastos operativos", False),
         ("Retiros (Celia / Toti)", f"=K{r_tot}", "Retiros de caja", True),
         ("Diferencia Caja", f"=L{r_tot}", "Cuaderno vs. esperado", True),
     ]
 
-    fila_res_inicio = fila_actual
-    for idx_res, (concepto, formula_val, ref_txt, es_destacado) in enumerate(resumen_items):
+    for concepto, formula_val, ref_txt, es_destacado in resumen_items:
         ws.row_dimensions[fila_actual].height = 20
         c1 = ws.cell(row=fila_actual, column=1, value=concepto)
         c2 = ws.cell(row=fila_actual, column=2, value=formula_val)
         c3 = ws.cell(row=fila_actual, column=3, value=ref_txt)
 
-        c1.border = BORDE_SUAVE
-        c2.border = BORDE_SUAVE
-        c3.border = BORDE_SUAVE
+        for c_item in (c1, c2, c3):
+            c_item.border = BORDE_SUAVE
 
         c2.number_format = FORMATO_MONEDA_ARS
         c2.alignment = Alignment(horizontal="right", vertical="center")
@@ -912,27 +856,24 @@ def generar_excel_unico_bytes(
         if es_destacado:
             c1.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
             c2.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
-            c1.fill = PatternFill(start_color="EDF2F8", end_color="EDF2F8", fill_type="solid")
-            c2.fill = PatternFill(start_color="EDF2F8", end_color="EDF2F8", fill_type="solid")
-            c3.fill = PatternFill(start_color="EDF2F8", end_color="EDF2F8", fill_type="solid")
+            for c_item in (c1, c2, c3):
+                c_item.fill = PatternFill(start_color="EDF2F8", end_color="EDF2F8", fill_type="solid")
         else:
             c1.font = Font(size=10)
             c2.font = Font(size=10)
             c3.font = Font(size=9, color="555555")
-
         fila_actual += 1
 
-    # Fila total de ventas brutas (Efectivo + MP Neto + MP IVA + BBVA Neto + BBVA IVA + Provincia)
     ws.row_dimensions[fila_actual].height = 22
-    r_ef = fila_res_inicio
-    r_mp_n = fila_res_inicio + 1
-    r_mp_i = fila_res_inicio + 2
-    r_bb_n = fila_res_inicio + 3
-    r_bb_i = fila_res_inicio + 4
-    r_pr = fila_res_inicio + 5
-
     c_v_lbl = ws.cell(row=fila_actual, column=1, value="TOTAL VENTAS DEL PERÍODO")
-    c_v_val = ws.cell(row=fila_actual, column=2, value=f"=B{r_ef}+B{r_mp_n}+B{r_mp_i}+B{r_bb_n}+B{r_bb_i}+B{r_pr}")
+    c_v_val = ws.cell(
+        row=fila_actual,
+        column=2,
+        value=(
+            f"=B{fila_res_inicio}+B{fila_res_inicio + 1}+B{fila_res_inicio + 2}"
+            f"+B{fila_res_inicio + 3}+B{fila_res_inicio + 4}+B{fila_res_inicio + 5}"
+        ),
+    )
     c_v_ref = ws.cell(row=fila_actual, column=3, value="Efectivo + MP + BBVA + Provincia")
     for c_item in (c_v_lbl, c_v_val, c_v_ref):
         c_item.font = Font(bold=True, size=10, color=COLOR_PRIMARIO)
@@ -960,15 +901,7 @@ def generar_excel_unico_bytes(
             )
         for g in cierre_obj.gastos_retiros:
             tipo_lbl = "RETIRO" if g.tipo == "retiro" else "GASTO"
-            movimientos_filas.append(
-                (
-                    f_txt,
-                    t_txt,
-                    tipo_lbl,
-                    g.concepto,
-                    float(to_dec(g.monto)),
-                )
-            )
+            movimientos_filas.append((f_txt, t_txt, tipo_lbl, g.concepto, float(to_dec(g.monto))))
 
     if movimientos_filas:
         _estilizar_banner_seccion(
@@ -1027,13 +960,7 @@ def generar_excel_unico_bytes(
 
     # --- CUADRO 4: BITÁCORA DE AUDITORÍA ---
     if eventos_auditoria:
-        _estilizar_banner_seccion(
-            ws,
-            fila_actual,
-            6,
-            "4. REGISTRO DE AUDITORÍA Y CAMBIOS",
-            COLOR_AUD_HDR,
-        )
+        _estilizar_banner_seccion(ws, fila_actual, 6, "4. REGISTRO DE AUDITORÍA Y CAMBIOS", COLOR_AUD_HDR)
         fila_actual += 1
 
         headers_aud = ["Fecha / Hora", "Usuario", "Acción", "Fecha Cierre", "Turno", "Detalle"]
@@ -1146,44 +1073,34 @@ def migrar_excel_anterior(file_bytes: bytes, usuario_actor: str = "Admin") -> tu
         reg["diferencia_caja"] = float(dif)
         reg["detalle_obs"] = obs
 
+        evento_mig = {
+            "fecha_cierre": fecha_norm,
+            "turno": turno_val,
+            "accion": "MIGRACION",
+            "usuario": usuario_actor,
+            "creado_en": ahora_arg().isoformat(),
+            "detalle": f"Importado desde hoja '{hoja_objetivo}' (fila {idx_row}).",
+            "payload_anterior": None,
+            "payload_nuevo": reg["payload_json"],
+        }
+
         sb = obtener_cliente_supabase()
         if sb is not None:
             sb.table("cierres_caja").upsert(reg, on_conflict="clave_cierre").execute()
-            sb.table("auditoria_cierres").insert(
-                {
-                    "fecha_cierre": fecha_norm,
-                    "turno": turno_val,
-                    "accion": "MIGRACION",
-                    "usuario": usuario_actor,
-                    "creado_en": ahora_arg().isoformat(),
-                    "detalle": f"Importado desde hoja '{hoja_objetivo}' (fila {idx_row}).",
-                    "payload_anterior": None,
-                    "payload_nuevo": reg["payload_json"],
-                }
-            ).execute()
+            sb.table("auditoria_cierres").insert(evento_mig).execute()
         else:
             actuales = [
                 r
-                for r in _leer_cierres_desde_local_excel()
+                for r in _leer_json_local(ARCHIVO_CIERRES_LOCAL)
                 if clave_cierre(str(r.get("fecha", "")), str(r.get("turno", ""))) != reg["clave_cierre"]
             ]
             actuales.append(reg)
             actuales = sorted(actuales, key=lambda r: (str(r.get("fecha", "")), str(r.get("turno", ""))))
-            _guardar_historico_local_desde_registros(actuales)
-            eventos = _leer_auditoria_local()
-            eventos.append(
-                {
-                    "fecha_cierre": fecha_norm,
-                    "turno": turno_val,
-                    "accion": "MIGRACION",
-                    "usuario": usuario_actor,
-                    "creado_en": ahora_arg().isoformat(),
-                    "detalle": f"Importado desde hoja '{hoja_objetivo}' (fila {idx_row}).",
-                    "payload_anterior": None,
-                    "payload_nuevo": reg["payload_json"],
-                }
-            )
-            _guardar_auditoria_local(eventos)
+            _guardar_json_local(ARCHIVO_CIERRES_LOCAL, actuales)
+
+            eventos = _leer_json_local(ARCHIVO_AUDITORIA_LOCAL)
+            eventos.append(evento_mig)
+            _guardar_json_local(ARCHIVO_AUDITORIA_LOCAL, eventos)
 
         filas_importadas += 1
 
@@ -1227,7 +1144,7 @@ with st.sidebar:
     if usa_supabase:
         st.caption("Persistencia: Supabase (Activa)")
     else:
-        st.caption("Persistencia: Local temporal (configurá Supabase para persistencia en nube)")
+        st.caption("Persistencia: Local JSON (configurá Supabase para persistencia en nube)")
     st.divider()
 
     menu_opcion = st.radio(
@@ -1246,7 +1163,7 @@ with st.sidebar:
 # --- VISTA 1: TABLERO DE COMANDO ---
 if menu_opcion == "Tablero de Comando (Resumen)":
     st.title("Óptica Klimt — Tablero de Comando Gerencial")
-    st.write("Vista ejecutiva del consolidado, discriminación de IVA (21%) y exportación del Excel en una sola hoja.")
+    st.write("Vista ejecutiva del consolidado, discriminación de IVA (21%) y exportación en una sola hoja de Excel.")
 
     try:
         todos_cierres = obtener_todos_los_cierres()
@@ -1410,9 +1327,25 @@ if menu_opcion == "Tablero de Comando (Resumen)":
 # --- VISTA 2: PROCESAR CIERRE DIARIO ---
 elif menu_opcion == "Procesar Cierre Diario":
     st.title("Óptica Klimt — Procesamiento y Auditoría de Cierre Diario")
-    st.write("Suba la fotografía de la libreta para extraer operaciones, discriminar IVA y guardar en el consolidado.")
+    st.write("Subí la foto de la libreta para extraer con IA o iniciá una carga manual para editar y guardar.")
 
-    uploaded_file = st.file_uploader("Seleccionar imagen de la planilla (JPG, PNG)", type=["jpg", "jpeg", "png"])
+    col_modo1, col_modo2 = st.columns([2, 1])
+    with col_modo1:
+        uploaded_file = st.file_uploader("Seleccionar imagen de la planilla (JPG, PNG)", type=["jpg", "jpeg", "png"])
+    with col_modo2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Cargar cierre manualmente (sin IA)", use_container_width=True):
+            st.session_state.resultado = CierreDia(
+                fecha=ahora_arg().date(),
+                turno="Único",
+                cajero="Celia",
+                saldo_inicial=Decimal("0.00"),
+                operaciones=[],
+                gastos_retiros=[],
+                observaciones="",
+            )
+            st.session_state.guardado_maestro = False
+            st.rerun()
 
     if uploaded_file is not None:
         col_img, col_act = st.columns([1, 1.5], gap="large")
@@ -1440,19 +1373,30 @@ elif menu_opcion == "Procesar Cierre Diario":
         sup_in = "Martín"
         comentario_in = res.observaciones or ""
 
-        with st.expander("Turno, Arqueo de Billetes y Auditoría", expanded=True):
-            col_m1, col_m2, col_m3 = st.columns(3)
+        with st.expander("1. Datos del Cierre, Saldo Inicial y Arqueo de Billetes", expanded=True):
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
             fecha_in = col_m1.date_input("Fecha contable:", value=res.fecha)
             turno_in = col_m2.text_input("Turno:", value=res.turno)
             cajero_in = col_m3.text_input("Cajero:", value=res.cajero or "Celia")
+            saldo_ini_in = col_m4.number_input(
+                "Saldo inicial caja ($):", min_value=0.0, step=1000.0, value=float(to_dec(res.saldo_inicial))
+            )
 
-            col_s1, col_s2 = st.columns(2)
+            col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
             sup_in = col_s1.text_input("Supervisor:", value=sup_in)
-            comentario_in = col_s2.text_input("Observaciones del cierre:", value=comentario_in)
+            caja_cuaderno_in = col_s2.number_input(
+                "Total CAJA cuaderno ($, 0 si no aplica):",
+                min_value=0.0,
+                step=1000.0,
+                value=float(to_dec(res.caja_total_cuaderno)) if res.caja_total_cuaderno is not None else 0.0,
+            )
+            comentario_in = col_s3.text_input("Observaciones del cierre:", value=comentario_in)
 
             res.fecha = fecha_in
             res.turno = normalizar_turno(turno_in)
             res.cajero = (cajero_in or "Celia").strip() or "Celia"
+            res.saldo_inicial = to_dec(saldo_ini_in)
+            res.caja_total_cuaderno = to_dec(caja_cuaderno_in) if caja_cuaderno_in > 0 else None
             res.observaciones = comentario_in
 
             st.markdown("**Conteo de Billetes (ARS):**")
@@ -1462,6 +1406,88 @@ elif menu_opcion == "Procesar Cierre Diario":
                     arqueo_dict[denom] = st.number_input(
                         f"$ {denom:,}", min_value=0, step=1, value=0, key=f"bill_{denom}"
                     )
+
+        with st.expander("2. Revisar y Editar Operaciones / Gastos antes de Guardar", expanded=True):
+            st.caption("Podés corregir montos, cambiar medios de pago, agregar filas nuevas o borrar filas erróneas.")
+
+            df_ops_init = pd.DataFrame(
+                [
+                    {
+                        "detalle": op.detalle,
+                        "monto": float(to_dec(op.monto)),
+                        "medio_pago": op.medio_pago,
+                        "confianza": op.confianza,
+                    }
+                    for op in (res.operaciones or [])
+                ]
+                if res.operaciones
+                else [{"detalle": "", "monto": 0.0, "medio_pago": "efectivo", "confianza": "alta"}]
+            )
+
+            df_ops_edit = st.data_editor(
+                df_ops_init,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="editor_operaciones",
+                column_config={
+                    "detalle": st.column_config.TextColumn("Detalle / Boleta"),
+                    "monto": st.column_config.NumberColumn("Monto (ARS)", min_value=0.0, step=100.0, format="$ %.2f"),
+                    "medio_pago": st.column_config.SelectboxColumn("Medio de Pago", options=MEDIOS_PAGO_OPCIONES),
+                    "confianza": st.column_config.SelectboxColumn("Confianza", options=["alta", "media", "baja"]),
+                },
+            )
+
+            ops_actualizadas: list[Operacion] = []
+            for _, row in df_ops_edit.iterrows():
+                monto_row = to_dec(row.get("monto"))
+                det_row = str(row.get("detalle") or "").strip()
+                if monto_row > Decimal("0.00") or det_row:
+                    mp_val = str(row.get("medio_pago") or "efectivo")
+                    if mp_val not in MEDIOS_PAGO_OPCIONES:
+                        mp_val = "efectivo"
+                    conf_val = str(row.get("confianza") or "alta")
+                    if conf_val not in ("alta", "media", "baja"):
+                        conf_val = "alta"
+                    ops_actualizadas.append(
+                        Operacion(detalle=det_row or "Venta", monto=monto_row, medio_pago=mp_val, confianza=conf_val)
+                    )
+            res.operaciones = ops_actualizadas
+
+            df_gastos_init = pd.DataFrame(
+                [
+                    {
+                        "tipo": g.tipo,
+                        "concepto": g.concepto,
+                        "monto": float(to_dec(g.monto)),
+                    }
+                    for g in (res.gastos_retiros or [])
+                ]
+                if res.gastos_retiros
+                else [{"tipo": "gasto", "concepto": "", "monto": 0.0}]
+            )
+
+            df_gastos_edit = st.data_editor(
+                df_gastos_init,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="editor_gastos",
+                column_config={
+                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["gasto", "retiro"]),
+                    "concepto": st.column_config.TextColumn("Concepto"),
+                    "monto": st.column_config.NumberColumn("Monto (ARS)", min_value=0.0, step=100.0, format="$ %.2f"),
+                },
+            )
+
+            gastos_actualizados: list[GastoRetiro] = []
+            for _, row in df_gastos_edit.iterrows():
+                monto_g = to_dec(row.get("monto"))
+                conc_g = str(row.get("concepto") or "").strip()
+                if monto_g > Decimal("0.00") or conc_g:
+                    tipo_g = str(row.get("tipo") or "gasto")
+                    if tipo_g not in ("gasto", "retiro"):
+                        tipo_g = "gasto"
+                    gastos_actualizados.append(GastoRetiro(tipo=tipo_g, concepto=conc_g or "Egreso", monto=monto_g))
+            res.gastos_retiros = gastos_actualizados
 
         d = procesar_datos_dia(res, arqueo_conteo=arqueo_dict)
 
@@ -1503,14 +1529,6 @@ elif menu_opcion == "Procesar Cierre Diario":
         st.divider()
         st.subheader("Confirmación y Exportación")
 
-        todos_act = obtener_todos_los_cierres()
-        aud_act = obtener_auditoria()
-        excel_consolidado_actual = generar_excel_unico_bytes(
-            registros=todos_act,
-            eventos_auditoria=aud_act,
-            etiqueta_rango="Consolidado_Actual",
-        )
-
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
             if not st.session_state.get("guardado_maestro", False):
@@ -1536,13 +1554,24 @@ elif menu_opcion == "Procesar Cierre Diario":
                 st.info("Este cierre ya fue confirmado y guardado en la fuente de verdad.")
 
         with col_dl2:
-            nombre_unico_cierre = (
-                f"Optica_Klimt_Cierres_{fecha_iso_actual}_{sanitizar_nombre_archivo(res.turno)}.xlsx"
-            )
-            st.download_button(
-                label="Descargar Excel (.xlsx)",
-                data=excel_consolidado_actual,
-                file_name=nombre_unico_cierre,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
+            if st.button("Preparar Excel Consolidado (.xlsx)", use_container_width=True):
+                todos_act = obtener_todos_los_cierres()
+                aud_act = obtener_auditoria()
+                st.session_state.excel_cierre_bytes = generar_excel_unico_bytes(
+                    registros=todos_act,
+                    eventos_auditoria=aud_act,
+                    etiqueta_rango="Consolidado_Actual",
+                )
+
+            if "excel_cierre_bytes" in st.session_state:
+                nombre_unico_cierre = (
+                    f"Optica_Klimt_Cierres_{fecha_iso_actual}_{sanitizar_nombre_archivo(res.turno)}.xlsx"
+                )
+                st.download_button(
+                    label="Descargar Excel (.xlsx)",
+                    data=st.session_state.excel_cierre_bytes,
+                    file_name=nombre_unico_cierre,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True,
+                )
